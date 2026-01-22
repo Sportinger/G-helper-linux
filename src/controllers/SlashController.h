@@ -38,6 +38,7 @@ signals:
 private:
     void runAsusctl(const QStringList &args);
     void checkAvailability();
+    void fetchCurrentState();
 
     bool m_enabled = true;
     int m_brightness = 128;

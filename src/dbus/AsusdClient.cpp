@@ -151,23 +151,30 @@ void AsusdClient::setChargeLimit(quint8 limit)
 {
     if (!m_connected) return;
 
-    QDBusMessage msg = QDBusMessage::createMethodCall(
-        SERVICE, PATH_PLATFORM, "org.freedesktop.DBus.Properties", "Set");
-    msg << INTERFACE_PLATFORM << "ChargeControlEndThreshold" << QVariant::fromValue(QDBusVariant(static_cast<uchar>(limit)));
+    qDebug() << "AsusdClient: Setting charge limit to" << limit;
 
-    QDBusPendingCall call = QDBusConnection::systemBus().asyncCall(msg);
-    auto *watcher = new QDBusPendingCallWatcher(call, this);
-    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, limit](QDBusPendingCallWatcher *w) {
-        QDBusPendingReply<> reply = *w;
-        if (reply.isError()) {
-            qWarning() << "Failed to set charge limit:" << reply.error().message();
-            emit errorOccurred(tr("Failed to set charge limit: %1").arg(reply.error().message()));
-        } else {
-            m_chargeLimit = limit;
-            emit chargeLimitChanged(limit);
-        }
-        w->deleteLater();
-    });
+    // Use busctl for reliable property setting
+    QStringList args;
+    args << "set-property"
+         << SERVICE
+         << PATH_PLATFORM
+         << INTERFACE_PLATFORM
+         << "ChargeControlEndThreshold"
+         << "y"
+         << QString::number(limit);
+
+    QProcess process;
+    process.start("busctl", args);
+    process.waitForFinished(3000);
+
+    if (process.exitCode() != 0) {
+        qWarning() << "Failed to set charge limit:" << process.readAllStandardError();
+        emit errorOccurred(tr("Failed to set charge limit"));
+    } else {
+        qDebug() << "AsusdClient: Charge limit set successfully";
+        m_chargeLimit = limit;
+        emit chargeLimitChanged(limit);
+    }
 }
 
 void AsusdClient::findAuraDevice()

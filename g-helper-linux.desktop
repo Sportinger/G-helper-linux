@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=G-Helper Linux
+Comment=ASUS ROG Laptop Control Tool
+Exec=env QT_QPA_PLATFORM=xcb /home/admin/Dokumente/G-helper-linux/build/g-helper-linux
+Icon=/home/admin/Dokumente/G-helper-linux/resources/icons/g-helper.svg
+Terminal=false
+Type=Application
+Categories=Utility;System;
+Keywords=ASUS;ROG;Fan;Battery;GPU;
+StartupNotify=true

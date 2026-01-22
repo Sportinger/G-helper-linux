@@ -82,6 +82,7 @@ private slots:
 
 private:
     void initAvailableModes();
+    void fetchCurrentState();
 
     AsusdClient *m_client;
 

@@ -3,6 +3,8 @@
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QIcon>
+#include <QScreen>
+#include <QWindow>
 
 using namespace Qt::StringLiterals;
 
@@ -79,6 +81,27 @@ int main(int argc, char *argv[])
 
     if (engine.rootObjects().isEmpty())
         return -1;
+
+    // Position window at bottom right
+    QObject *rootObject = engine.rootObjects().first();
+    QWindow *window = qobject_cast<QWindow*>(rootObject);
+
+    auto positionWindow = [window]() {
+        if (!window) return;
+        QScreen *screen = QGuiApplication::primaryScreen();
+        if (screen) {
+            QRect availableGeometry = screen->availableGeometry();
+            int x = availableGeometry.right() - window->width() - 12;
+            int y = availableGeometry.bottom() - window->height() - 60;
+            window->setPosition(x, y);
+        }
+    };
+
+    // Position on startup
+    positionWindow();
+
+    // Reposition when shown from tray
+    QObject::connect(&trayManager, &TrayManager::showWindowRequested, positionWindow);
 
     // Start monitoring
     systemMonitor.start();

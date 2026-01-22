@@ -1,30 +1,38 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Window
 import GHelperLinux
 import "../theme"
 import "../components"
 
-Dialog {
+Window {
     id: root
-    title: qsTr("Fan Curve Editor")
-    modal: true
-    width: 500
-    height: 450
+    title: qsTr("Fans and Power")
+    width: 520
+    height: 500
+    minimumWidth: 480
+    minimumHeight: 450
+    color: Theme.background
+    flags: Qt.Window
 
     property int selectedFan: 0 // 0 = CPU, 1 = GPU
     property var currentCurve: selectedFan === 0 ? FanController.cpuCurve : FanController.gpuCurve
 
-    background: Rectangle {
-        color: Theme.background
-        border.color: Theme.border
-        radius: Theme.radiusMedium
+    function open() {
+        root.show()
+        root.raise()
+        root.requestActivate()
     }
 
-    header: Rectangle {
-        color: Theme.surface
+    // Header
+    Rectangle {
+        id: headerBar
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
         height: 50
-        radius: Theme.radiusMedium
+        color: Theme.surface
 
         RowLayout {
             anchors.fill: parent
@@ -91,9 +99,22 @@ Dialog {
                 }
             }
         }
+
+        Rectangle {
+            anchors.bottom: parent.bottom
+            width: parent.width
+            height: 1
+            color: Theme.border
+        }
     }
 
-    contentItem: ColumnLayout {
+    // Content
+    ColumnLayout {
+        anchors.top: headerBar.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: Theme.spacingMedium
         spacing: Theme.spacingMedium
 
         // Fan curve canvas
@@ -203,33 +224,6 @@ Dialog {
                     color: Theme.warning
                     horizontalAlignment: Text.AlignHCenter
                 }
-            }
-        }
-    }
-
-    footer: DialogButtonBox {
-        background: Rectangle {
-            color: Theme.surface
-        }
-
-        Button {
-            text: qsTr("Close")
-            DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
-
-            background: Rectangle {
-                implicitWidth: 80
-                implicitHeight: Theme.buttonHeight
-                radius: Theme.radiusSmall
-                color: parent.pressed ? Theme.accentDark :
-                       parent.hovered ? Theme.accentLight : Theme.accent
-            }
-
-            contentItem: Text {
-                text: parent.text
-                font.pixelSize: Theme.fontSizeMedium
-                color: Theme.textPrimary
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
             }
         }
     }

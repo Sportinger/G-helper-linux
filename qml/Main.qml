@@ -14,18 +14,15 @@ ApplicationWindow {
     height: 700
     minimumWidth: 400
     minimumHeight: 600
+    x: Screen.desktopAvailableWidth - width - 12
+    y: Screen.desktopAvailableHeight - height - 52
     title: qsTr("G-Helper Linux")
     color: Theme.background
 
-    Component.onCompleted: {
-        if (Settings.windowX >= 0 && Settings.windowY >= 0) {
-            x = Settings.windowX
-            y = Settings.windowY
-        }
+    function positionBottomRight() {
+        x = Screen.desktopAvailableWidth - width - 12
+        y = Screen.desktopAvailableHeight - height - 52
     }
-
-    onXChanged: Settings.windowX = x
-    onYChanged: Settings.windowY = y
 
     onClosing: function(close) {
         if (Settings.minimizeToTray && TrayManager.visible) {
@@ -37,6 +34,7 @@ ApplicationWindow {
     Connections {
         target: TrayManager
         function onShowWindowRequested() {
+            positionBottomRight()
             window.show()
             window.raise()
             window.requestActivate()
@@ -181,7 +179,7 @@ ApplicationWindow {
                                         if (modelData.profile >= 0) {
                                             PerformanceController.setProfile(modelData.profile)
                                         } else {
-                                            fanCurveDialog.open()
+                                            openFanCurveWindow()
                                         }
                                     }
                                 }
@@ -722,9 +720,22 @@ ApplicationWindow {
         anchors.centerIn: parent
     }
 
-    FanCurveDialog {
-        id: fanCurveDialog
-        anchors.centerIn: parent
+    // Fan Curve Window (separate window)
+    Loader {
+        id: fanCurveLoader
+        active: false
+        sourceComponent: FanCurveDialog {}
+    }
+
+    function openFanCurveWindow() {
+        if (!fanCurveLoader.active) {
+            fanCurveLoader.active = true
+        }
+        if (fanCurveLoader.item) {
+            fanCurveLoader.item.show()
+            fanCurveLoader.item.raise()
+            fanCurveLoader.item.requestActivate()
+        }
     }
 
     // Color picker dialog (simplified)

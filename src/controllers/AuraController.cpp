@@ -1,5 +1,8 @@
 #include "AuraController.h"
 #include "AsusdClient.h"
+#include <QProcess>
+#include <QDebug>
+#include <QRegularExpression>
 
 AuraController::AuraController(AsusdClient *client, QObject *parent)
     : QObject(parent)
@@ -17,6 +20,48 @@ AuraController::AuraController(AsusdClient *client, QObject *parent)
     m_available = m_client->isConnected();
     if (m_available) {
         m_brightness = static_cast<int>(m_client->ledBrightness());
+        fetchCurrentState();
+    }
+}
+
+void AuraController::fetchCurrentState()
+{
+    // Read current LED state from asusctl
+    QProcess process;
+    process.start("asusctl", QStringList{"led-mode", "-c"});
+    process.waitForFinished(3000);
+
+    QString output = QString::fromUtf8(process.readAllStandardOutput());
+    qDebug() << "AuraController: Current LED state:" << output;
+
+    // Parse output to get current mode and colors
+    // Example: "Current mode: Static, Colour 1: #00a0e0"
+    for (const QString &line : output.split('\n')) {
+        QString trimmed = line.trimmed().toLower();
+        if (trimmed.contains("mode")) {
+            if (line.contains("Static", Qt::CaseInsensitive)) m_currentMode = Static;
+            else if (line.contains("Breathe", Qt::CaseInsensitive)) m_currentMode = Breathe;
+            else if (line.contains("Strobe", Qt::CaseInsensitive)) m_currentMode = Strobe;
+            else if (line.contains("Rainbow", Qt::CaseInsensitive)) m_currentMode = Rainbow;
+            else if (line.contains("Pulse", Qt::CaseInsensitive)) m_currentMode = Pulse;
+            else if (line.contains("Comet", Qt::CaseInsensitive)) m_currentMode = Comet;
+            else if (line.contains("Off", Qt::CaseInsensitive)) m_currentMode = Off;
+            emit currentModeChanged(m_currentMode);
+        }
+        if (trimmed.contains("colour") || trimmed.contains("color")) {
+            // Try to extract hex color
+            QRegularExpression re("#([0-9A-Fa-f]{6})");
+            QRegularExpressionMatch match = re.match(line);
+            if (match.hasMatch()) {
+                QString hex = "#" + match.captured(1);
+                if (trimmed.contains("1") || !m_color1.isValid()) {
+                    m_color1 = QColor(hex);
+                } else {
+                    m_color2 = QColor(hex);
+                }
+                emit colorsChanged();
+            }
+        }
     }
 }
 
