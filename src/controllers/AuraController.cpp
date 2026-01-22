@@ -74,6 +74,8 @@ void AuraController::setColor1(const QColor &color)
     if (m_color1 != color) {
         m_color1 = color;
         emit colorsChanged();
+        // Automatically apply the effect when color changes
+        applyEffect();
     }
 }
 

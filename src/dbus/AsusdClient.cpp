@@ -3,6 +3,7 @@
 #include <QDBusReply>
 #include <QDebug>
 #include <QRegularExpression>
+#include <QProcess>
 
 AsusdClient::AsusdClient(QObject *parent)
     : QObject(parent)
@@ -248,40 +249,50 @@ void AsusdClient::setLedBrightness(quint32 level)
 
 void AsusdClient::setLedMode(quint32 mode, const QColor &color1, const QColor &color2, quint8 speed)
 {
-    if (!m_connected || !m_auraInterface) return;
-
-    // This would need to be adapted to the actual asusd API
-    QDBusMessage msg = QDBusMessage::createMethodCall(
-        SERVICE, "/xyz/ljones/aura", INTERFACE_AURA, "SetLedMode");
-
-    QVariantMap modeData;
-    modeData["mode"] = mode;
-    modeData["color1"] = QVariant::fromValue(QList<quint8>{
-        static_cast<quint8>(color1.red()),
-        static_cast<quint8>(color1.green()),
-        static_cast<quint8>(color1.blue())
-    });
-    if (color2.isValid()) {
-        modeData["color2"] = QVariant::fromValue(QList<quint8>{
-            static_cast<quint8>(color2.red()),
-            static_cast<quint8>(color2.green()),
-            static_cast<quint8>(color2.blue())
-        });
-    }
-    modeData["speed"] = speed;
-
-    msg << modeData;
-
-    QDBusPendingCall call = QDBusConnection::systemBus().asyncCall(msg);
-    auto *watcher = new QDBusPendingCallWatcher(call, this);
-    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *w) {
-        QDBusPendingReply<> reply = *w;
-        if (reply.isError()) {
-            qWarning() << "Failed to set LED mode:" << reply.error().message();
-            emit errorOccurred(tr("Failed to set LED mode: %1").arg(reply.error().message()));
+    if (!m_connected || m_auraPath.isEmpty()) {
+        findAuraDevice();
+        if (m_auraPath.isEmpty()) {
+            qWarning() << "AsusdClient: Aura device not found";
+            return;
         }
-        w->deleteLater();
-    });
+    }
+
+    qDebug() << "AsusdClient: Setting LED mode" << mode << "color1:" << color1;
+
+    // LedModeData property has signature (uu(yyy)(yyy)ss)
+    QString speedStr = "Med";
+    if (speed == 0) speedStr = "Low";
+    else if (speed == 2) speedStr = "High";
+
+    // Use busctl-style command via QProcess for reliability
+    QStringList args;
+    args << "set-property"
+         << SERVICE
+         << m_auraPath
+         << INTERFACE_AURA
+         << "LedModeData"
+         << "(uu(yyy)(yyy)ss)"
+         << QString::number(mode)
+         << "0"  // zone
+         << QString::number(color1.red())
+         << QString::number(color1.green())
+         << QString::number(color1.blue())
+         << QString::number(color2.isValid() ? color2.red() : 0)
+         << QString::number(color2.isValid() ? color2.green() : 0)
+         << QString::number(color2.isValid() ? color2.blue() : 0)
+         << speedStr
+         << "Right";
+
+    QProcess process;
+    process.start("busctl", args);
+    process.waitForFinished(3000);
+
+    if (process.exitCode() != 0) {
+        qWarning() << "Failed to set LED mode:" << process.readAllStandardError();
+        emit errorOccurred(tr("Failed to set LED mode"));
+    } else {
+        qDebug() << "AsusdClient: LED mode set successfully";
+    }
 }
 
 QVariantList AsusdClient::getFanCurves(quint32 profile)
