@@ -204,35 +204,35 @@ QVariantList FanController::defaultCurve(int profile)
 
     switch (profile) {
         case 0: // Silent
-            curve << QVariantMap{{"temp", 30}, {"fan", 0}};
-            curve << QVariantMap{{"temp", 45}, {"fan", 10}};
-            curve << QVariantMap{{"temp", 55}, {"fan", 25}};
-            curve << QVariantMap{{"temp", 65}, {"fan", 40}};
-            curve << QVariantMap{{"temp", 75}, {"fan", 55}};
+            curve << QVariantMap{{"temp", 50}, {"fan", 0}};
+            curve << QVariantMap{{"temp", 60}, {"fan", 10}};
+            curve << QVariantMap{{"temp", 70}, {"fan", 25}};
+            curve << QVariantMap{{"temp", 75}, {"fan", 40}};
+            curve << QVariantMap{{"temp", 80}, {"fan", 55}};
             curve << QVariantMap{{"temp", 85}, {"fan", 70}};
             curve << QVariantMap{{"temp", 95}, {"fan", 85}};
             curve << QVariantMap{{"temp", 100}, {"fan", 100}};
             break;
 
         case 1: // Balanced
-            curve << QVariantMap{{"temp", 30}, {"fan", 0}};
-            curve << QVariantMap{{"temp", 40}, {"fan", 15}};
-            curve << QVariantMap{{"temp", 50}, {"fan", 30}};
-            curve << QVariantMap{{"temp", 60}, {"fan", 45}};
-            curve << QVariantMap{{"temp", 70}, {"fan", 60}};
-            curve << QVariantMap{{"temp", 80}, {"fan", 75}};
-            curve << QVariantMap{{"temp", 90}, {"fan", 90}};
+            curve << QVariantMap{{"temp", 50}, {"fan", 0}};
+            curve << QVariantMap{{"temp", 60}, {"fan", 20}};
+            curve << QVariantMap{{"temp", 70}, {"fan", 40}};
+            curve << QVariantMap{{"temp", 75}, {"fan", 55}};
+            curve << QVariantMap{{"temp", 80}, {"fan", 70}};
+            curve << QVariantMap{{"temp", 85}, {"fan", 85}};
+            curve << QVariantMap{{"temp", 95}, {"fan", 95}};
             curve << QVariantMap{{"temp", 100}, {"fan", 100}};
             break;
 
         case 2: // Turbo
-            curve << QVariantMap{{"temp", 30}, {"fan", 15}};
-            curve << QVariantMap{{"temp", 40}, {"fan", 30}};
-            curve << QVariantMap{{"temp", 50}, {"fan", 45}};
-            curve << QVariantMap{{"temp", 60}, {"fan", 60}};
-            curve << QVariantMap{{"temp", 70}, {"fan", 75}};
-            curve << QVariantMap{{"temp", 80}, {"fan", 90}};
-            curve << QVariantMap{{"temp", 90}, {"fan", 100}};
+            curve << QVariantMap{{"temp", 50}, {"fan", 20}};
+            curve << QVariantMap{{"temp", 60}, {"fan", 40}};
+            curve << QVariantMap{{"temp", 70}, {"fan", 60}};
+            curve << QVariantMap{{"temp", 75}, {"fan", 75}};
+            curve << QVariantMap{{"temp", 80}, {"fan", 85}};
+            curve << QVariantMap{{"temp", 85}, {"fan", 95}};
+            curve << QVariantMap{{"temp", 95}, {"fan", 100}};
             curve << QVariantMap{{"temp", 100}, {"fan", 100}};
             break;
 

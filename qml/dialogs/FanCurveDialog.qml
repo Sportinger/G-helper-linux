@@ -306,7 +306,7 @@ Window {
 
             for (var i = 0; i < internalCurve.length; i++) {
                 var point = internalCurve[i]
-                var x = padding + (point.temp - 30) / 70 * w
+                var x = padding + (point.temp - 50) / 50 * w
                 var y = height - padding - (point.fan / 100) * h
 
                 var dist = Math.sqrt(Math.pow(mx - x, 2) + Math.pow(my - y, 2))
@@ -320,10 +320,10 @@ Window {
             var w = width - padding * 2
             var h = height - padding * 2
 
-            var temp = Math.round(30 + (mx - padding) / w * 70)
+            var temp = Math.round(50 + (mx - padding) / w * 50)
             var fan = Math.round(100 - (my - padding) / h * 100)
 
-            temp = Math.max(30, Math.min(100, temp))
+            temp = Math.max(50, Math.min(100, temp))
             fan = Math.max(0, Math.min(100, fan))
 
             return { temp: temp, fan: fan }
@@ -359,9 +359,9 @@ Window {
                 ctx.fillText((100 - i * 20) + "%", padding - 4, y + 3)
             }
 
-            // Vertical grid lines (temp)
-            for (var j = 0; j <= 7; j++) {
-                var x = padding + w * j / 7
+            // Vertical grid lines (temp) - 50 to 100
+            for (var j = 0; j <= 5; j++) {
+                var x = padding + w * j / 5
                 ctx.beginPath()
                 ctx.moveTo(x, padding)
                 ctx.lineTo(x, padding + h)
@@ -369,7 +369,7 @@ Window {
 
                 ctx.fillStyle = Theme.textSecondary
                 ctx.textAlign = "center"
-                ctx.fillText((30 + j * 10) + "°", x, height - padding + 12)
+                ctx.fillText((50 + j * 10) + "°", x, height - padding + 12)
             }
 
             // Use internalCurve for drawing
@@ -383,7 +383,7 @@ Window {
 
             for (var k = 0; k < drawCurve.length; k++) {
                 var point = drawCurve[k]
-                var px = padding + (point.temp - 30) / 70 * w
+                var px = padding + (point.temp - 50) / 50 * w
                 var py = padding + h - (point.fan / 100) * h
 
                 if (k === 0) {
@@ -397,7 +397,7 @@ Window {
             // Draw points
             for (var m = 0; m < drawCurve.length; m++) {
                 var pt = drawCurve[m]
-                var ptx = padding + (pt.temp - 30) / 70 * w
+                var ptx = padding + (pt.temp - 50) / 50 * w
                 var pty = padding + h - (pt.fan / 100) * h
 
                 ctx.beginPath()

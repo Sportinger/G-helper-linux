@@ -202,7 +202,7 @@ Rectangle {
 
             for (var j = 0; j < curveData.length; j++) {
                 var point = curveData[j]
-                var x = padding + (point.temp - 30) / 70 * (w - padding * 2)
+                var x = padding + (point.temp - 50) / 50 * (w - padding * 2)
                 var y = h - padding - (point.fan / 100) * (h - padding * 2)
 
                 if (j === 0) {
@@ -215,7 +215,7 @@ Rectangle {
 
             // Current temperature indicator
             if (currentTemp > 0 && enabled) {
-                var tempX = padding + (currentTemp - 30) / 70 * (w - padding * 2)
+                var tempX = padding + (currentTemp - 50) / 50 * (w - padding * 2)
                 ctx.strokeStyle = Theme.warning
                 ctx.lineWidth = 1
                 ctx.setLineDash([2, 2])
