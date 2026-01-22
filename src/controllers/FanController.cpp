@@ -17,36 +17,35 @@ FanController::FanController(AsusdClient *client, QObject *parent)
     m_available = m_client->isConnected();
     if (m_available) {
         m_currentProfile = static_cast<int>(m_client->platformProfile());
-        loadFanCurves();
     }
+    // Always load curves (will use defaults if asusd not connected)
+    loadFanCurves();
 }
 
 FanController::~FanController() = default;
 
 void FanController::setCpuCurve(const QVariantList &points, bool enabled)
 {
-    if (!m_available) {
-        emit errorOccurred(tr("Fan control is not available"));
-        return;
-    }
-
     m_cpuCurve = points;
     m_cpuCurveEnabled = enabled;
-    m_client->setFanCurve(static_cast<quint32>(m_currentProfile), CpuFan, points, enabled);
     emit fanCurvesChanged();
+
+    // Send to daemon if available
+    if (m_available) {
+        m_client->setFanCurve(static_cast<quint32>(m_currentProfile), CpuFan, points, enabled);
+    }
 }
 
 void FanController::setGpuCurve(const QVariantList &points, bool enabled)
 {
-    if (!m_available) {
-        emit errorOccurred(tr("Fan control is not available"));
-        return;
-    }
-
     m_gpuCurve = points;
     m_gpuCurveEnabled = enabled;
-    m_client->setFanCurve(static_cast<quint32>(m_currentProfile), GpuFan, points, enabled);
     emit fanCurvesChanged();
+
+    // Send to daemon if available
+    if (m_available) {
+        m_client->setFanCurve(static_cast<quint32>(m_currentProfile), GpuFan, points, enabled);
+    }
 }
 
 void FanController::resetToDefaults()
