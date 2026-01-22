@@ -5,7 +5,11 @@
 
 SuperGfxClient::SuperGfxClient(QObject *parent)
     : QObject(parent)
+    , m_powerPollTimer(new QTimer(this))
 {
+    m_powerPollTimer->setInterval(2000); // Poll every 2 seconds
+    connect(m_powerPollTimer, &QTimer::timeout, this, &SuperGfxClient::fetchGpuPower);
+
     setupConnections();
 }
 
@@ -24,6 +28,7 @@ void SuperGfxClient::setupConnections()
                     "NotifyGfxStatus", this, SLOT(onNotifyGfxStatus(quint32)));
 
         refresh();
+        startPowerPolling();
     }
 }
 
@@ -59,6 +64,7 @@ void SuperGfxClient::reconnect()
 
         emit connectedChanged(true);
         refresh();
+        startPowerPolling();
     }
 }
 
@@ -229,4 +235,18 @@ bool SuperGfxClient::requiresLogout(int fromMode, int toMode) const
         return true;
     }
     return false;
+}
+
+void SuperGfxClient::startPowerPolling()
+{
+    if (m_connected && !m_powerPollTimer->isActive()) {
+        m_powerPollTimer->start();
+    }
+}
+
+void SuperGfxClient::stopPowerPolling()
+{
+    if (m_powerPollTimer->isActive()) {
+        m_powerPollTimer->stop();
+    }
 }

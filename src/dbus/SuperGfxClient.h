@@ -5,6 +5,7 @@
 #include <QDBusConnection>
 #include <QDBusInterface>
 #include <QDBusPendingCallWatcher>
+#include <QTimer>
 #include "DBusTypes.h"
 
 class SuperGfxClient : public QObject
@@ -71,7 +72,11 @@ private:
     static constexpr const char* PATH = "/org/supergfxctl/Gfx";
     static constexpr const char* INTERFACE = "org.supergfxctl.Daemon";
 
+    void startPowerPolling();
+    void stopPowerPolling();
+
     QDBusInterface *m_interface = nullptr;
+    QTimer *m_powerPollTimer = nullptr;
     bool m_connected = false;
     int m_currentMode = Hybrid;
     int m_pendingMode = -1;

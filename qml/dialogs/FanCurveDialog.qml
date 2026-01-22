@@ -8,26 +8,17 @@ import "../components"
 
 Window {
     id: root
-    title: qsTr("Fans and Power")
+    title: qsTr("Fan Curves")
     width: 520
-    height: 700
+    height: 750
     minimumWidth: 480
-    minimumHeight: 600
+    minimumHeight: 650
     color: Theme.background
     flags: Qt.Window
 
-    property int selectedFan: 0 // 0 = CPU, 1 = GPU
     property int selectedProfile: 0 // 0 = Silent, 1 = Balanced, 2 = Turbo
-    property var currentCurve: selectedFan === 0 ? FanController.cpuCurve : FanController.gpuCurve
     property int mainWindowX: 0
     property int mainWindowY: 0
-
-    onSelectedFanChanged: {
-        // Reload curve when switching between CPU and GPU
-        if (curveCanvas) {
-            curveCanvas.reloadFromExternal()
-        }
-    }
 
     // Profile colors
     function profileColor(profile) {
@@ -39,10 +30,18 @@ Window {
         }
     }
 
+    function profileName(profile) {
+        switch(profile) {
+            case 0: return qsTr("Silent")
+            case 1: return qsTr("Balanced")
+            case 2: return qsTr("Turbo")
+            default: return ""
+        }
+    }
+
     function open(mainX, mainY) {
         mainWindowX = mainX
         mainWindowY = mainY
-        // Position to the left of main window with small gap
         root.x = mainX - root.width - 8
         root.y = mainY
         root.show()
@@ -72,55 +71,40 @@ Window {
 
             Item { Layout.fillWidth: true }
 
-            // Fan selector
-            TabBar {
-                id: fanTabs
-                currentIndex: root.selectedFan
+            // Profile selector
+            Row {
+                spacing: Theme.spacingSmall
 
-                background: Rectangle {
-                    color: "transparent"
-                }
+                Repeater {
+                    model: 3
+                    Button {
+                        text: profileName(index)
+                        width: 80
+                        height: 32
 
-                TabButton {
-                    text: qsTr("CPU Fan")
-                    width: implicitWidth
+                        background: Rectangle {
+                            radius: Theme.radiusSmall
+                            color: root.selectedProfile === index ?
+                                   Theme.colorWithAlpha(profileColor(index), 0.3) :
+                                   (parent.hovered ? Theme.colorWithAlpha(profileColor(index), 0.15) : "transparent")
+                            border.color: profileColor(index)
+                            border.width: root.selectedProfile === index ? 2 : 1
+                        }
 
-                    background: Rectangle {
-                        color: fanTabs.currentIndex === 0 ?
-                               Theme.colorWithAlpha(Theme.quietColor, 0.3) : "transparent"
-                        radius: Theme.radiusSmall
+                        contentItem: Text {
+                            text: parent.text
+                            font.pixelSize: Theme.fontSizeSmall
+                            font.bold: root.selectedProfile === index
+                            color: profileColor(index)
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+
+                        onClicked: {
+                            root.selectedProfile = index
+                            // TODO: Load curves for this profile from storage
+                        }
                     }
-
-                    contentItem: Text {
-                        text: parent.text
-                        font.pixelSize: Theme.fontSizeMedium
-                        color: fanTabs.currentIndex === 0 ? Theme.quietColor : Theme.textSecondary
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-
-                    onClicked: root.selectedFan = 0
-                }
-
-                TabButton {
-                    text: qsTr("GPU Fan")
-                    width: implicitWidth
-
-                    background: Rectangle {
-                        color: fanTabs.currentIndex === 1 ?
-                               Theme.colorWithAlpha(Theme.performanceColor, 0.3) : "transparent"
-                        radius: Theme.radiusSmall
-                    }
-
-                    contentItem: Text {
-                        text: parent.text
-                        font.pixelSize: Theme.fontSizeMedium
-                        color: fanTabs.currentIndex === 1 ? Theme.performanceColor : Theme.textSecondary
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-
-                    onClicked: root.selectedFan = 1
                 }
             }
         }
@@ -133,115 +117,82 @@ Window {
         }
     }
 
-    // Content
+    // Content - Two graphs stacked
     ColumnLayout {
         anchors.top: headerBar.bottom
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         anchors.margins: Theme.spacingMedium
-        spacing: Theme.spacingMedium
+        spacing: Theme.spacingSmall
 
-        // Fan curve canvas
+        // CPU Fan section
+        RowLayout {
+            Layout.fillWidth: true
+            Text {
+                text: qsTr("CPU Fan")
+                font.pixelSize: Theme.fontSizeMedium
+                font.bold: true
+                color: Theme.quietColor
+            }
+            Item { Layout.fillWidth: true }
+        }
+
         FanCurveCanvas {
-            id: curveCanvas
+            id: cpuCanvas
             Layout.fillWidth: true
             Layout.fillHeight: true
-            curveData: root.currentCurve
+            Layout.preferredHeight: 250
+            curveData: FanController.cpuCurve
             curveColor: root.profileColor(root.selectedProfile)
+            label: "CPU"
 
             onCurveChanged: function(newCurve) {
-                console.log("Curve changed, saving to FanController")
-                if (root.selectedFan === 0) {
-                    FanController.setCpuCurve(newCurve, FanController.cpuCurveEnabled)
-                } else {
-                    FanController.setGpuCurve(newCurve, FanController.gpuCurveEnabled)
-                }
+                FanController.setCpuCurve(newCurve, FanController.cpuCurveEnabled)
             }
         }
 
-        // Preset buttons
+        // GPU Fan section
+        RowLayout {
+            Layout.fillWidth: true
+            Text {
+                text: qsTr("GPU Fan")
+                font.pixelSize: Theme.fontSizeMedium
+                font.bold: true
+                color: Theme.performanceColor
+            }
+            Item { Layout.fillWidth: true }
+        }
+
+        FanCurveCanvas {
+            id: gpuCanvas
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.preferredHeight: 250
+            curveData: FanController.gpuCurve
+            curveColor: root.profileColor(root.selectedProfile)
+            label: "GPU"
+
+            onCurveChanged: function(newCurve) {
+                FanController.setGpuCurve(newCurve, FanController.gpuCurveEnabled)
+            }
+        }
+
+        // Bottom buttons
         RowLayout {
             Layout.fillWidth: true
             spacing: Theme.spacingSmall
 
-            Text {
-                text: qsTr("Presets:")
-                font.pixelSize: Theme.fontSizeMedium
-                color: Theme.textSecondary
-            }
-
             Button {
-                text: qsTr("Silent")
-                onClicked: { root.selectedProfile = 0; applyPreset(0) }
+                text: qsTr("Reset to Defaults")
+                onClicked: {
+                    FanController.resetToDefaults()
+                    cpuCanvas.reloadFromExternal()
+                    gpuCanvas.reloadFromExternal()
+                }
 
                 background: Rectangle {
-                    implicitHeight: 28
-                    radius: Theme.radiusSmall
-                    color: root.selectedProfile === 0 ? Theme.colorWithAlpha(Theme.quietColor, 0.3) :
-                           (parent.hovered ? Theme.colorWithAlpha(Theme.quietColor, 0.2) : "transparent")
-                    border.color: Theme.quietColor
-                    border.width: root.selectedProfile === 0 ? 2 : 1
-                }
-
-                contentItem: Text {
-                    text: parent.text
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.quietColor
-                    horizontalAlignment: Text.AlignHCenter
-                }
-            }
-
-            Button {
-                text: qsTr("Balanced")
-                onClicked: { root.selectedProfile = 1; applyPreset(1) }
-
-                background: Rectangle {
-                    implicitHeight: 28
-                    radius: Theme.radiusSmall
-                    color: root.selectedProfile === 1 ? Theme.colorWithAlpha(Theme.balancedColor, 0.3) :
-                           (parent.hovered ? Theme.colorWithAlpha(Theme.balancedColor, 0.2) : "transparent")
-                    border.color: Theme.balancedColor
-                    border.width: root.selectedProfile === 1 ? 2 : 1
-                }
-
-                contentItem: Text {
-                    text: parent.text
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.balancedColor
-                    horizontalAlignment: Text.AlignHCenter
-                }
-            }
-
-            Button {
-                text: qsTr("Turbo")
-                onClicked: { root.selectedProfile = 2; applyPreset(2) }
-
-                background: Rectangle {
-                    implicitHeight: 28
-                    radius: Theme.radiusSmall
-                    color: root.selectedProfile === 2 ? Theme.colorWithAlpha(Theme.performanceColor, 0.3) :
-                           (parent.hovered ? Theme.colorWithAlpha(Theme.performanceColor, 0.2) : "transparent")
-                    border.color: Theme.performanceColor
-                    border.width: root.selectedProfile === 2 ? 2 : 1
-                }
-
-                contentItem: Text {
-                    text: parent.text
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.performanceColor
-                    horizontalAlignment: Text.AlignHCenter
-                }
-            }
-
-            Item { Layout.fillWidth: true }
-
-            Button {
-                text: qsTr("Reset")
-                onClicked: FanController.resetToDefaults()
-
-                background: Rectangle {
-                    implicitHeight: 28
+                    implicitHeight: 32
                     radius: Theme.radiusSmall
                     color: parent.hovered ? Theme.colorWithAlpha(Theme.warning, 0.2) : "transparent"
                     border.color: Theme.warning
@@ -252,20 +203,18 @@ Window {
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.warning
                     horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
                 }
             }
-        }
-    }
 
-    function applyPreset(profile) {
-        var presetCurve = FanController.defaultCurve(profile)
-        if (root.selectedFan === 0) {
-            FanController.setCpuCurve(presetCurve, true)
-        } else {
-            FanController.setGpuCurve(presetCurve, true)
+            Item { Layout.fillWidth: true }
+
+            Text {
+                text: qsTr("Profile: ") + profileName(root.selectedProfile)
+                font.pixelSize: Theme.fontSizeSmall
+                color: profileColor(root.selectedProfile)
+            }
         }
-        // Reload the canvas with new data
-        curveCanvas.reloadFromExternal()
     }
 
     // Fan curve canvas component
@@ -275,15 +224,15 @@ Window {
         property var curveData: []
         property color curveColor: Theme.accent
         property int dragIndex: -1
+        property string label: ""
 
-        // Internal curve data - completely local, not bound to external source
+        // Internal curve data - completely local
         property var internalCurve: []
         property bool initialized: false
 
-        signal curveChanged(var newCurve)  // Emitted when drag ends
+        signal curveChanged(var newCurve)
 
         onCurveDataChanged: {
-            // Only initialize once, or when fan selection changes
             if (!initialized || internalCurve.length === 0) {
                 initFromExternal()
             }
@@ -326,7 +275,6 @@ Window {
             onPositionChanged: function(mouse) {
                 if (pressed && canvas.dragIndex >= 0 && canvas.internalCurve.length > 0) {
                     var coords = canvas.screenToData(mouse.x, mouse.y)
-                    // Update internal curve directly
                     canvas.internalCurve[canvas.dragIndex].temp = coords.temp
                     canvas.internalCurve[canvas.dragIndex].fan = coords.fan
                     canvas.requestPaint()
@@ -335,7 +283,6 @@ Window {
 
             onReleased: function(mouse) {
                 if (canvas.dragIndex >= 0 && canvas.internalCurve.length > 0) {
-                    // Create a copy to emit
                     var curveCopy = []
                     for (var i = 0; i < canvas.internalCurve.length; i++) {
                         curveCopy.push({
@@ -350,7 +297,7 @@ Window {
         }
 
         function findNearestPoint(mx, my) {
-            var padding = 40
+            var padding = 35
             var w = width - padding * 2
             var h = height - padding * 2
 
@@ -362,13 +309,13 @@ Window {
                 var y = height - padding - (point.fan / 100) * h
 
                 var dist = Math.sqrt(Math.pow(mx - x, 2) + Math.pow(my - y, 2))
-                if (dist < 15) return i
+                if (dist < 12) return i
             }
             return -1
         }
 
         function screenToData(mx, my) {
-            var padding = 40
+            var padding = 35
             var w = width - padding * 2
             var h = height - padding * 2
 
@@ -385,7 +332,7 @@ Window {
             var ctx = getContext("2d")
             ctx.reset()
 
-            var padding = 40
+            var padding = 35
             var w = width - padding * 2
             var h = height - padding * 2
 
@@ -398,18 +345,17 @@ Window {
             ctx.lineWidth = 0.5
 
             // Horizontal grid lines (fan %)
-            for (var i = 0; i <= 10; i++) {
-                var y = padding + h * i / 10
+            for (var i = 0; i <= 5; i++) {
+                var y = padding + h * i / 5
                 ctx.beginPath()
                 ctx.moveTo(padding, y)
                 ctx.lineTo(padding + w, y)
                 ctx.stroke()
 
-                // Labels
                 ctx.fillStyle = Theme.textSecondary
-                ctx.font = "10px sans-serif"
+                ctx.font = "9px sans-serif"
                 ctx.textAlign = "right"
-                ctx.fillText((100 - i * 10) + "%", padding - 5, y + 4)
+                ctx.fillText((100 - i * 20) + "%", padding - 4, y + 3)
             }
 
             // Vertical grid lines (temp)
@@ -420,23 +366,10 @@ Window {
                 ctx.lineTo(x, padding + h)
                 ctx.stroke()
 
-                // Labels
                 ctx.fillStyle = Theme.textSecondary
                 ctx.textAlign = "center"
-                ctx.fillText((30 + j * 10) + "°", x, height - padding + 15)
+                ctx.fillText((30 + j * 10) + "°", x, height - padding + 12)
             }
-
-            // Axis labels
-            ctx.fillStyle = Theme.textPrimary
-            ctx.font = "12px sans-serif"
-            ctx.textAlign = "center"
-            ctx.fillText("Temperature (°C)", width / 2, height - 5)
-
-            ctx.save()
-            ctx.translate(12, height / 2)
-            ctx.rotate(-Math.PI / 2)
-            ctx.fillText("Fan Speed (%)", 0, 0)
-            ctx.restore()
 
             // Use internalCurve for drawing
             if (!internalCurve || internalCurve.length === 0) return
@@ -467,11 +400,11 @@ Window {
                 var pty = padding + h - (pt.fan / 100) * h
 
                 ctx.beginPath()
-                ctx.arc(ptx, pty, dragIndex === m ? 8 : 6, 0, Math.PI * 2)
+                ctx.arc(ptx, pty, dragIndex === m ? 7 : 5, 0, Math.PI * 2)
                 ctx.fillStyle = dragIndex === m ? Theme.accentLight : curveColor
                 ctx.fill()
                 ctx.strokeStyle = Theme.textPrimary
-                ctx.lineWidth = 2
+                ctx.lineWidth = 1.5
                 ctx.stroke()
             }
         }
