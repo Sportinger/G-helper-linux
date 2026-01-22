@@ -79,20 +79,27 @@ void AsusdClient::setPlatformProfile(quint32 profile)
 
     qDebug() << "AsusdClient: Setting platform profile to" << profileName;
 
-    // Use asusctl command for reliable profile switching
-    QProcess process;
-    process.start("asusctl", QStringList{"profile", "set", profileName});
-    process.waitForFinished(5000);
+    // Run asusctl asynchronously to not block UI
+    // UI will update when D-Bus PropertiesChanged signal is received
+    QProcess *process = new QProcess(this);
+    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this, process, profile, profileName](int exitCode, QProcess::ExitStatus) {
+        if (exitCode != 0) {
+            QString error = QString::fromUtf8(process->readAllStandardError());
+            qWarning() << "AsusdClient: Failed to set profile:" << error;
+            emit errorOccurred(tr("Failed to set performance profile"));
+        } else {
+            qDebug() << "AsusdClient: Profile set successfully to" << profileName;
+            // Update local state and emit signal after successful command
+            if (m_platformProfile != profile) {
+                m_platformProfile = profile;
+                emit platformProfileChanged(profile);
+            }
+        }
+        process->deleteLater();
+    });
 
-    if (process.exitCode() != 0) {
-        QString error = QString::fromUtf8(process.readAllStandardError());
-        qWarning() << "AsusdClient: Failed to set profile:" << error;
-        emit errorOccurred(tr("Failed to set performance profile: %1").arg(error));
-    } else {
-        qDebug() << "AsusdClient: Profile set successfully to" << profileName;
-        m_platformProfile = profile;
-        emit platformProfileChanged(profile);
-    }
+    process->start("asusctl", QStringList{"profile", "set", profileName});
 }
 
 void AsusdClient::onPropertiesChanged(const QString &interface, const QVariantMap &changed, const QStringList &invalidated)
@@ -156,7 +163,7 @@ void AsusdClient::setChargeLimit(quint8 limit)
 
     qDebug() << "AsusdClient: Setting charge limit to" << limit;
 
-    // Use busctl for reliable property setting
+    // Use busctl for reliable property setting - async to not block UI
     QStringList args;
     args << "set-property"
          << SERVICE
@@ -166,18 +173,21 @@ void AsusdClient::setChargeLimit(quint8 limit)
          << "y"
          << QString::number(limit);
 
-    QProcess process;
-    process.start("busctl", args);
-    process.waitForFinished(3000);
+    QProcess *process = new QProcess(this);
+    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this, process, limit](int exitCode, QProcess::ExitStatus) {
+        if (exitCode != 0) {
+            qWarning() << "Failed to set charge limit:" << process->readAllStandardError();
+            emit errorOccurred(tr("Failed to set charge limit"));
+        } else {
+            qDebug() << "AsusdClient: Charge limit set successfully";
+            m_chargeLimit = limit;
+            emit chargeLimitChanged(limit);
+        }
+        process->deleteLater();
+    });
 
-    if (process.exitCode() != 0) {
-        qWarning() << "Failed to set charge limit:" << process.readAllStandardError();
-        emit errorOccurred(tr("Failed to set charge limit"));
-    } else {
-        qDebug() << "AsusdClient: Charge limit set successfully";
-        m_chargeLimit = limit;
-        emit chargeLimitChanged(limit);
-    }
+    process->start("busctl", args);
 }
 
 void AsusdClient::findAuraDevice()
@@ -274,7 +284,7 @@ void AsusdClient::setLedMode(quint32 mode, const QColor &color1, const QColor &c
     if (speed == 0) speedStr = "Low";
     else if (speed == 2) speedStr = "High";
 
-    // Use busctl-style command via QProcess for reliability
+    // Use busctl-style command via QProcess for reliability - async to not block UI
     QStringList args;
     args << "set-property"
          << SERVICE
@@ -293,16 +303,19 @@ void AsusdClient::setLedMode(quint32 mode, const QColor &color1, const QColor &c
          << speedStr
          << "Right";
 
-    QProcess process;
-    process.start("busctl", args);
-    process.waitForFinished(3000);
+    QProcess *process = new QProcess(this);
+    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this, process](int exitCode, QProcess::ExitStatus) {
+        if (exitCode != 0) {
+            qWarning() << "Failed to set LED mode:" << process->readAllStandardError();
+            emit errorOccurred(tr("Failed to set LED mode"));
+        } else {
+            qDebug() << "AsusdClient: LED mode set successfully";
+        }
+        process->deleteLater();
+    });
 
-    if (process.exitCode() != 0) {
-        qWarning() << "Failed to set LED mode:" << process.readAllStandardError();
-        emit errorOccurred(tr("Failed to set LED mode"));
-    } else {
-        qDebug() << "AsusdClient: LED mode set successfully";
-    }
+    process->start("busctl", args);
 }
 
 QVariantList AsusdClient::getFanCurves(quint32 profile)
@@ -365,33 +378,33 @@ void AsusdClient::setFanCurve(quint32 profile, quint32 fanType, const QVariantLi
 
     qDebug() << "AsusdClient: Setting fan curve for" << profileName << fanName << ":" << curveData;
 
-    // First set the curve data
-    QProcess process;
+    // Run asynchronously to not block UI
+    QProcess *process = new QProcess(this);
+    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this, process, profileName, fanName, enabled](int exitCode, QProcess::ExitStatus) {
+        if (exitCode != 0) {
+            QString error = QString::fromUtf8(process->readAllStandardError());
+            qWarning() << "Failed to set fan curve:" << error;
+        } else {
+            qDebug() << "AsusdClient: Fan curve set successfully";
+
+            // Enable the fan curve asynchronously
+            QProcess *enableProcess = new QProcess(this);
+            connect(enableProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                    enableProcess, &QProcess::deleteLater);
+
+            QStringList enableArgs;
+            enableArgs << "fan-curve" << "--mod-profile" << profileName
+                       << "--fan" << fanName
+                       << "--enable-fan-curve" << (enabled ? "true" : "false");
+            enableProcess->start("asusctl", enableArgs);
+        }
+        process->deleteLater();
+    });
+
     QStringList args;
     args << "fan-curve" << "--mod-profile" << profileName << "--fan" << fanName << "--data" << curveData;
-
-    process.start("asusctl", args);
-    process.waitForFinished(5000);
-
-    if (process.exitCode() != 0) {
-        QString error = QString::fromUtf8(process.readAllStandardError());
-        qWarning() << "Failed to set fan curve:" << error;
-        emit errorOccurred(tr("Failed to set fan curve: %1").arg(error));
-    } else {
-        qDebug() << "AsusdClient: Fan curve set successfully";
-    }
-
-    // Enable or disable the fan curve
-    QProcess enableProcess;
-    QStringList enableArgs;
-    enableArgs << "fan-curve" << "--mod-profile" << profileName
-               << "--fan" << fanName
-               << "--enable-fan-curve" << (enabled ? "true" : "false");
-
-    enableProcess.start("asusctl", enableArgs);
-    enableProcess.waitForFinished(3000);
-
-    emit fanCurvesChanged();
+    process->start("asusctl", args);
 }
 
 void AsusdClient::resetFanCurves(quint32 profile)
