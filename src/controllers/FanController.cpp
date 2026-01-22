@@ -131,8 +131,9 @@ void FanController::setCpuCurve(const QVariantList &points, bool enabled)
 
     emit fanCurvesChanged();
 
-    // Send to daemon if available
+    // Always apply to hardware immediately (current profile is being edited)
     if (m_available) {
+        qDebug() << "FanController: Applying CPU curve to hardware immediately";
         m_client->setFanCurve(static_cast<quint32>(m_currentProfile), CpuFan, points, enabled);
     }
 }
@@ -149,8 +150,9 @@ void FanController::setGpuCurve(const QVariantList &points, bool enabled)
 
     emit fanCurvesChanged();
 
-    // Send to daemon if available
+    // Always apply to hardware immediately (current profile is being edited)
     if (m_available) {
+        qDebug() << "FanController: Applying GPU curve to hardware immediately";
         m_client->setFanCurve(static_cast<quint32>(m_currentProfile), GpuFan, points, enabled);
     }
 }

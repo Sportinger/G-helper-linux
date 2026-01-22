@@ -338,13 +338,55 @@ void AsusdClient::setFanCurve(quint32 profile, quint32 fanType, const QVariantLi
 {
     if (!m_connected) return;
 
-    // This would send the fan curve to asusd
-    // Implementation depends on actual asusd API
+    // Convert profile to name
+    QString profileName;
+    switch (profile) {
+        case 0: profileName = "Quiet"; break;
+        case 1: profileName = "Balanced"; break;
+        case 2: profileName = "Performance"; break;
+        default: return;
+    }
 
-    qDebug() << "Setting fan curve for profile" << profile
-             << "fan type" << fanType
-             << "enabled" << enabled
-             << "points" << points.size();
+    // Convert fan type to name
+    QString fanName = (fanType == 0) ? "cpu" : "gpu";
+
+    // Build curve data string: "30c:0%,40c:15%,..."
+    QStringList dataPoints;
+    for (const QVariant &point : points) {
+        QVariantMap p = point.toMap();
+        int temp = p["temp"].toInt();
+        int fan = p["fan"].toInt();
+        dataPoints << QString("%1c:%2%").arg(temp).arg(fan);
+    }
+    QString curveData = dataPoints.join(",");
+
+    qDebug() << "AsusdClient: Setting fan curve for" << profileName << fanName << ":" << curveData;
+
+    // First set the curve data
+    QProcess process;
+    QStringList args;
+    args << "fan-curve" << "--mod-profile" << profileName << "--fan" << fanName << "--data" << curveData;
+
+    process.start("asusctl", args);
+    process.waitForFinished(5000);
+
+    if (process.exitCode() != 0) {
+        QString error = QString::fromUtf8(process.readAllStandardError());
+        qWarning() << "Failed to set fan curve:" << error;
+        emit errorOccurred(tr("Failed to set fan curve: %1").arg(error));
+    } else {
+        qDebug() << "AsusdClient: Fan curve set successfully";
+    }
+
+    // Enable or disable the fan curve
+    QProcess enableProcess;
+    QStringList enableArgs;
+    enableArgs << "fan-curve" << "--mod-profile" << profileName
+               << "--fan" << fanName
+               << "--enable-fan-curve" << (enabled ? "true" : "false");
+
+    enableProcess.start("asusctl", enableArgs);
+    enableProcess.waitForFinished(3000);
 
     emit fanCurvesChanged();
 }
