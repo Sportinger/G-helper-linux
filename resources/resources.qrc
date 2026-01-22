@@ -1,0 +1,29 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/">
+        <file>icons/g-helper.svg</file>
+        <file>icons/performance.svg</file>
+        <file>icons/quiet.svg</file>
+        <file>icons/balanced.svg</file>
+        <file>icons/turbo.svg</file>
+        <file>icons/gpu.svg</file>
+        <file>icons/eco.svg</file>
+        <file>icons/hybrid.svg</file>
+        <file>icons/dedicated.svg</file>
+        <file>icons/vfio.svg</file>
+        <file>icons/battery.svg</file>
+        <file>icons/charging.svg</file>
+        <file>icons/keyboard.svg</file>
+        <file>icons/fan.svg</file>
+        <file>icons/monitor.svg</file>
+        <file>icons/info.svg</file>
+        <file>icons/settings.svg</file>
+        <file>icons/led-off.svg</file>
+        <file>icons/led-static.svg</file>
+        <file>icons/led-breathe.svg</file>
+        <file>icons/led-strobe.svg</file>
+        <file>icons/led-rainbow.svg</file>
+        <file>icons/led-pulse.svg</file>
+        <file>icons/led-comet.svg</file>
+    </qresource>
+</RCC>

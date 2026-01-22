@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=G-Helper Linux
+GenericName=ASUS ROG Laptop Control
+Comment=Control ASUS ROG laptop settings - performance, GPU, fans, RGB
+Exec=g-helper-linux
+Icon=g-helper-linux
+Terminal=false
+Categories=System;Utility;Settings;HardwareSettings;
+Keywords=asus;rog;laptop;performance;gpu;fan;rgb;battery;
+StartupNotify=true
+StartupWMClass=g-helper-linux
+X-GNOME-UsesNotifications=true
