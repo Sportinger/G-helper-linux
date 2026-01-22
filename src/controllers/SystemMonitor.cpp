@@ -108,6 +108,24 @@ void SystemMonitor::findHwmonPaths()
 
     m_available = !m_cpuTempPath.isEmpty() || !m_gpuTempPath.isEmpty();
     emit availableChanged(m_available);
+
+    // Find backlight device
+    QDir backlightDir("/sys/class/backlight");
+    QStringList backlightDevices = backlightDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QString &device : backlightDevices) {
+        QString basePath = "/sys/class/backlight/" + device;
+        // Prefer amdgpu backlight over nvidia
+        if (device.startsWith("amdgpu") || m_backlightPath.isEmpty()) {
+            m_backlightPath = basePath;
+            QFile maxFile(basePath + "/max_brightness");
+            if (maxFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                QTextStream in(&maxFile);
+                m_maxBrightness = in.readLine().toInt();
+                maxFile.close();
+                qDebug() << "Found backlight at:" << m_backlightPath << "max:" << m_maxBrightness;
+            }
+        }
+    }
 }
 
 void SystemMonitor::update()
@@ -155,6 +173,9 @@ void SystemMonitor::update()
     readGpuUsage();
     readMemoryInfo();
     readApuPower();
+    readDisplayBrightness();
+    readBatteryPower();
+    calculateSystemPower();
 }
 
 int SystemMonitor::readTemperature(const QString &path)
@@ -282,5 +303,111 @@ void SystemMonitor::readApuPower()
             m_apuPower = power;
             emit apuPowerChanged(power);
         }
+    }
+}
+
+void SystemMonitor::readDisplayBrightness()
+{
+    if (m_backlightPath.isEmpty() || m_maxBrightness <= 0) return;
+
+    QFile file(m_backlightPath + "/brightness");
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QTextStream in(&file);
+        int brightness = in.readLine().toInt();
+        file.close();
+
+        // Calculate brightness percentage
+        int brightnessPercent = (brightness * 100) / m_maxBrightness;
+        if (m_displayBrightness != brightnessPercent) {
+            m_displayBrightness = brightnessPercent;
+            emit displayBrightnessChanged(brightnessPercent);
+        }
+
+        // Estimate display power based on brightness (linear interpolation)
+        double displayPower = MIN_DISPLAY_POWER +
+            (MAX_DISPLAY_POWER - MIN_DISPLAY_POWER) * (brightnessPercent / 100.0);
+        if (qAbs(m_displayPower - displayPower) > 0.1) {
+            m_displayPower = displayPower;
+            emit displayPowerChanged(displayPower);
+        }
+    }
+}
+
+void SystemMonitor::readBatteryPower()
+{
+    // Check if on battery
+    QFile acFile(QString("%1/online").arg(AC_PATH));
+    if (acFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QTextStream in(&acFile);
+        bool pluggedIn = (in.readLine().trimmed() == "1");
+        acFile.close();
+
+        bool onBattery = !pluggedIn;
+        if (m_onBattery != onBattery) {
+            m_onBattery = onBattery;
+            emit onBatteryChanged(onBattery);
+        }
+    }
+
+    // Read battery discharge power
+    if (m_onBattery) {
+        // Try power_now first
+        QFile powerFile(QString("%1/power_now").arg(BATTERY_PATH));
+        if (powerFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QTextStream in(&powerFile);
+            double power = in.readLine().toDouble() / 1000000.0; // µW to W
+            powerFile.close();
+
+            if (qAbs(m_batteryPower - power) > 0.1) {
+                m_batteryPower = power;
+                emit batteryPowerChanged(power);
+            }
+            return;
+        }
+
+        // Fallback to current_now * voltage_now
+        QFile currentFile(QString("%1/current_now").arg(BATTERY_PATH));
+        QFile voltageFile(QString("%1/voltage_now").arg(BATTERY_PATH));
+        if (currentFile.open(QIODevice::ReadOnly | QIODevice::Text) &&
+            voltageFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QTextStream currentIn(&currentFile);
+            QTextStream voltageIn(&voltageFile);
+            double current = currentIn.readLine().toDouble() / 1000000.0; // µA to A
+            double voltage = voltageIn.readLine().toDouble() / 1000000.0; // µV to V
+            double power = current * voltage;
+            currentFile.close();
+            voltageFile.close();
+
+            if (qAbs(m_batteryPower - power) > 0.1) {
+                m_batteryPower = power;
+                emit batteryPowerChanged(power);
+            }
+        }
+    } else {
+        // On AC, battery power reading is not useful
+        if (m_batteryPower != 0.0) {
+            m_batteryPower = 0.0;
+            emit batteryPowerChanged(0.0);
+        }
+    }
+}
+
+void SystemMonitor::calculateSystemPower()
+{
+    double systemPower = 0.0;
+
+    if (m_onBattery && m_batteryPower > 0.1) {
+        // On battery: use battery discharge as base (includes everything except display)
+        // Add display power estimate
+        systemPower = m_batteryPower + m_displayPower;
+    } else {
+        // On AC: estimate from components
+        // APU power (CPU + iGPU) + Display + Misc (SSD, WiFi, RAM, fans, etc.)
+        systemPower = m_apuPower + m_displayPower + MISC_POWER_ESTIMATE;
+    }
+
+    if (qAbs(m_systemPower - systemPower) > 0.1) {
+        m_systemPower = systemPower;
+        emit systemPowerChanged(systemPower);
     }
 }

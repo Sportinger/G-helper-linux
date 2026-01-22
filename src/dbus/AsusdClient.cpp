@@ -66,27 +66,30 @@ void AsusdClient::onPlatformProfileResult(QDBusPendingCallWatcher *watcher)
 
 void AsusdClient::setPlatformProfile(quint32 profile)
 {
-    if (!m_connected) {
-        qWarning() << "AsusdClient: Not connected, cannot set profile";
-        return;
+    // Convert profile number to name
+    QString profileName;
+    switch (profile) {
+        case 0: profileName = "Quiet"; break;
+        case 1: profileName = "Balanced"; break;
+        case 2: profileName = "Performance"; break;
+        default:
+            qWarning() << "AsusdClient: Invalid profile:" << profile;
+            return;
     }
 
-    qDebug() << "AsusdClient: Setting platform profile to" << profile;
+    qDebug() << "AsusdClient: Setting platform profile to" << profileName;
 
-    // Use QDBusInterface for cleaner property setting
-    QDBusInterface iface(SERVICE, PATH_PLATFORM, INTERFACE_PLATFORM, QDBusConnection::systemBus());
-    if (!iface.isValid()) {
-        qWarning() << "AsusdClient: Interface not valid:" << iface.lastError().message();
-        return;
-    }
+    // Use asusctl command for reliable profile switching
+    QProcess process;
+    process.start("asusctl", QStringList{"profile", "set", profileName});
+    process.waitForFinished(5000);
 
-    // Set property directly
-    bool success = iface.setProperty("PlatformProfile", QVariant::fromValue(profile));
-    if (!success) {
-        qWarning() << "AsusdClient: Failed to set PlatformProfile property";
-        emit errorOccurred(tr("Failed to set performance profile"));
+    if (process.exitCode() != 0) {
+        QString error = QString::fromUtf8(process.readAllStandardError());
+        qWarning() << "AsusdClient: Failed to set profile:" << error;
+        emit errorOccurred(tr("Failed to set performance profile: %1").arg(error));
     } else {
-        qDebug() << "AsusdClient: Profile set successfully";
+        qDebug() << "AsusdClient: Profile set successfully to" << profileName;
         m_platformProfile = profile;
         emit platformProfileChanged(profile);
     }

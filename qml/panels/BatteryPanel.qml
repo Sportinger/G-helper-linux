@@ -95,22 +95,39 @@ Rectangle {
 
             Item { Layout.fillWidth: true }
 
-            // Power draw
+            // System power draw
             ColumnLayout {
                 spacing: 2
-                visible: BatteryController.powerDraw > 0
+                visible: SystemMonitor.systemPower > 0
 
                 Text {
-                    text: qsTr("Power")
+                    text: qsTr("System")
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.textSecondary
                 }
 
                 Text {
-                    text: BatteryController.powerDraw.toFixed(1) + " W"
+                    text: SystemMonitor.systemPower.toFixed(1) + " W"
                     font.pixelSize: Theme.fontSizeMedium
                     font.bold: true
                     color: Theme.textPrimary
+
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 500
+                        ToolTip.text: {
+                            var details = "APU: " + SystemMonitor.apuPower.toFixed(1) + "W\n"
+                            details += "Display: " + SystemMonitor.displayPower.toFixed(1) + "W"
+                            if (SystemMonitor.onBattery) {
+                                details += "\n(Batterie-Messung)"
+                            } else {
+                                details += "\nSonstige: ~5W (geschätzt)"
+                            }
+                            return details
+                        }
+                    }
                 }
             }
         }

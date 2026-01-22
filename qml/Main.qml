@@ -560,16 +560,34 @@ ApplicationWindow {
                         Item { Layout.fillWidth: true }
                         Label {
                             text: {
-                                var batText = BatteryController.isCharging
-                                    ? "+" + BatteryController.powerDraw.toFixed(1) + "W"
-                                    : "-" + BatteryController.powerDraw.toFixed(1) + "W"
-                                var apuText = SystemMonitor.apuPower > 0
-                                    ? " | APU: " + SystemMonitor.apuPower.toFixed(1) + "W"
-                                    : ""
-                                return batText + apuText
+                                var systemText = "System: " + SystemMonitor.systemPower.toFixed(1) + "W"
+                                if (SystemMonitor.onBattery) {
+                                    return systemText + " (Batterie)"
+                                } else {
+                                    return systemText + " (geschätzt)"
+                                }
                             }
                             font.pixelSize: 13
                             color: Theme.textSecondary
+
+                            ToolTip.visible: powerMouseArea.containsMouse
+                            ToolTip.delay: 500
+                            ToolTip.text: {
+                                var details = "APU: " + SystemMonitor.apuPower.toFixed(1) + "W\n"
+                                details += "Display (~" + SystemMonitor.displayBrightness + "%): " + SystemMonitor.displayPower.toFixed(1) + "W"
+                                if (SystemMonitor.onBattery) {
+                                    details += "\nBatterie-Entladung: " + SystemMonitor.batteryPower.toFixed(1) + "W"
+                                } else {
+                                    details += "\nSonstige (SSD/WiFi/RAM): ~5W"
+                                }
+                                return details
+                            }
+
+                            MouseArea {
+                                id: powerMouseArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                            }
                         }
                     }
 

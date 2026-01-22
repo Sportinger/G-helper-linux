@@ -19,6 +19,11 @@ class SystemMonitor : public QObject
     Q_PROPERTY(int memoryUsed READ memoryUsed NOTIFY memoryChanged)
     Q_PROPERTY(int memoryTotal READ memoryTotal NOTIFY memoryChanged)
     Q_PROPERTY(double apuPower READ apuPower NOTIFY apuPowerChanged)
+    Q_PROPERTY(double systemPower READ systemPower NOTIFY systemPowerChanged)
+    Q_PROPERTY(double displayPower READ displayPower NOTIFY displayPowerChanged)
+    Q_PROPERTY(double batteryPower READ batteryPower NOTIFY batteryPowerChanged)
+    Q_PROPERTY(int displayBrightness READ displayBrightness NOTIFY displayBrightnessChanged)
+    Q_PROPERTY(bool onBattery READ isOnBattery NOTIFY onBatteryChanged)
     Q_PROPERTY(bool available READ isAvailable NOTIFY availableChanged)
 
 public:
@@ -36,6 +41,11 @@ public:
     int memoryUsed() const { return m_memoryUsed; }
     int memoryTotal() const { return m_memoryTotal; }
     double apuPower() const { return m_apuPower; }
+    double systemPower() const { return m_systemPower; }
+    double displayPower() const { return m_displayPower; }
+    double batteryPower() const { return m_batteryPower; }
+    int displayBrightness() const { return m_displayBrightness; }
+    bool isOnBattery() const { return m_onBattery; }
     bool isAvailable() const { return m_available; }
 
     Q_INVOKABLE void start();
@@ -53,6 +63,11 @@ signals:
     void gpuUsageChanged(double usage);
     void memoryChanged();
     void apuPowerChanged(double power);
+    void systemPowerChanged(double power);
+    void displayPowerChanged(double power);
+    void batteryPowerChanged(double power);
+    void displayBrightnessChanged(int brightness);
+    void onBatteryChanged(bool onBattery);
     void availableChanged(bool available);
 
 private slots:
@@ -66,6 +81,9 @@ private:
     void readGpuUsage();
     void readMemoryInfo();
     void readApuPower();
+    void readDisplayBrightness();
+    void readBatteryPower();
+    void calculateSystemPower();
 
     QTimer *m_updateTimer;
     bool m_available = false;
@@ -76,6 +94,8 @@ private:
     QString m_cpuFanPath;
     QString m_gpuFanPath;
     QString m_apuPowerPath;
+    QString m_backlightPath;
+    int m_maxBrightness = 0;
 
     // Cached values
     int m_cpuTemp = 0;
@@ -89,12 +109,22 @@ private:
     int m_memoryUsed = 0;
     int m_memoryTotal = 0;
     double m_apuPower = 0.0;
+    double m_systemPower = 0.0;
+    double m_displayPower = 0.0;
+    double m_batteryPower = 0.0;
+    int m_displayBrightness = 0;
+    bool m_onBattery = false;
 
     // For CPU usage calculation
     qint64 m_prevIdleTime = 0;
     qint64 m_prevTotalTime = 0;
 
     static constexpr int MAX_FAN_RPM = 6000; // Approximate max RPM for percentage calculation
+    static constexpr double MAX_DISPLAY_POWER = 15.0; // Max display power in watts at 100% brightness
+    static constexpr double MIN_DISPLAY_POWER = 2.0;  // Min display power in watts at 0% brightness
+    static constexpr double MISC_POWER_ESTIMATE = 5.0; // Estimated power for SSD, WiFi, RAM, etc.
+    static constexpr const char* BATTERY_PATH = "/sys/class/power_supply/BAT1";
+    static constexpr const char* AC_PATH = "/sys/class/power_supply/ACAD";
 };
 
 #endif // SYSTEMMONITOR_H
