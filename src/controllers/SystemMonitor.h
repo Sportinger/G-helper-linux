@@ -18,6 +18,7 @@ class SystemMonitor : public QObject
     Q_PROPERTY(double gpuUsage READ gpuUsage NOTIFY gpuUsageChanged)
     Q_PROPERTY(int memoryUsed READ memoryUsed NOTIFY memoryChanged)
     Q_PROPERTY(int memoryTotal READ memoryTotal NOTIFY memoryChanged)
+    Q_PROPERTY(double apuPower READ apuPower NOTIFY apuPowerChanged)
     Q_PROPERTY(bool available READ isAvailable NOTIFY availableChanged)
 
 public:
@@ -34,6 +35,7 @@ public:
     double gpuUsage() const { return m_gpuUsage; }
     int memoryUsed() const { return m_memoryUsed; }
     int memoryTotal() const { return m_memoryTotal; }
+    double apuPower() const { return m_apuPower; }
     bool isAvailable() const { return m_available; }
 
     Q_INVOKABLE void start();
@@ -50,6 +52,7 @@ signals:
     void cpuUsageChanged(double usage);
     void gpuUsageChanged(double usage);
     void memoryChanged();
+    void apuPowerChanged(double power);
     void availableChanged(bool available);
 
 private slots:
@@ -62,6 +65,7 @@ private:
     void readCpuUsage();
     void readGpuUsage();
     void readMemoryInfo();
+    void readApuPower();
 
     QTimer *m_updateTimer;
     bool m_available = false;
@@ -71,6 +75,7 @@ private:
     QString m_gpuTempPath;
     QString m_cpuFanPath;
     QString m_gpuFanPath;
+    QString m_apuPowerPath;
 
     // Cached values
     int m_cpuTemp = 0;
@@ -83,6 +88,7 @@ private:
     double m_gpuUsage = 0.0;
     int m_memoryUsed = 0;
     int m_memoryTotal = 0;
+    double m_apuPower = 0.0;
 
     // For CPU usage calculation
     qint64 m_prevIdleTime = 0;

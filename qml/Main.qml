@@ -562,11 +562,13 @@ ApplicationWindow {
                         Item { Layout.fillWidth: true }
                         Label {
                             text: {
-                                if (BatteryController.isCharging) {
-                                    return "Charging: " + BatteryController.powerDraw.toFixed(1) + "W"
-                                } else {
-                                    return "Discharging: " + BatteryController.powerDraw.toFixed(1) + "W"
-                                }
+                                var batText = BatteryController.isCharging
+                                    ? "+" + BatteryController.powerDraw.toFixed(1) + "W"
+                                    : "-" + BatteryController.powerDraw.toFixed(1) + "W"
+                                var apuText = SystemMonitor.apuPower > 0
+                                    ? " | APU: " + SystemMonitor.apuPower.toFixed(1) + "W"
+                                    : ""
+                                return batText + apuText
                             }
                             font.pixelSize: 13
                             color: Theme.textSecondary

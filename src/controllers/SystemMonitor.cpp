@@ -63,13 +63,21 @@ void SystemMonitor::findHwmonPaths()
                 }
             }
 
-            // GPU temperature (amdgpu for AMD, nvidia for NVIDIA)
+            // GPU temperature and power (amdgpu for AMD, nvidia for NVIDIA)
             if (name == "amdgpu" || name == "nvidia") {
                 QDir deviceDir(basePath);
                 QStringList tempFiles = deviceDir.entryList(QStringList() << "temp*_input", QDir::Files);
                 if (!tempFiles.isEmpty()) {
                     m_gpuTempPath = basePath + "/" + tempFiles.first();
                     qDebug() << "Found GPU temp at:" << m_gpuTempPath;
+                }
+                // APU/GPU power
+                if (deviceDir.exists("power1_input")) {
+                    m_apuPowerPath = basePath + "/power1_input";
+                    qDebug() << "Found APU power at:" << m_apuPowerPath;
+                } else if (deviceDir.exists("power1_average")) {
+                    m_apuPowerPath = basePath + "/power1_average";
+                    qDebug() << "Found APU power (average) at:" << m_apuPowerPath;
                 }
             }
 
@@ -142,10 +150,11 @@ void SystemMonitor::update()
         }
     }
 
-    // Read CPU/GPU usage
+    // Read CPU/GPU usage and power
     readCpuUsage();
     readGpuUsage();
     readMemoryInfo();
+    readApuPower();
 }
 
 int SystemMonitor::readTemperature(const QString &path)
@@ -255,6 +264,23 @@ void SystemMonitor::readMemoryInfo()
             m_memoryTotal = total;
             m_memoryUsed = used;
             emit memoryChanged();
+        }
+    }
+}
+
+void SystemMonitor::readApuPower()
+{
+    if (m_apuPowerPath.isEmpty()) return;
+
+    QFile file(m_apuPowerPath);
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QTextStream in(&file);
+        double power = in.readLine().toDouble() / 1000000.0; // microwatts to watts
+        file.close();
+
+        if (qAbs(m_apuPower - power) > 0.1) {
+            m_apuPower = power;
+            emit apuPowerChanged(power);
         }
     }
 }
