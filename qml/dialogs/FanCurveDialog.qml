@@ -17,9 +17,20 @@ Window {
     flags: Qt.Window
 
     property int selectedFan: 0 // 0 = CPU, 1 = GPU
+    property int selectedProfile: 0 // 0 = Silent, 1 = Balanced, 2 = Turbo
     property var currentCurve: selectedFan === 0 ? FanController.cpuCurve : FanController.gpuCurve
     property int mainWindowX: 0
     property int mainWindowY: 0
+
+    // Profile colors
+    function profileColor(profile) {
+        switch(profile) {
+            case 0: return Theme.quietColor      // Silent - cyan
+            case 1: return Theme.balancedColor   // Balanced - green
+            case 2: return Theme.performanceColor // Turbo - orange
+            default: return Theme.accent
+        }
+    }
 
     function open(mainX, mainY) {
         mainWindowX = mainX
@@ -130,17 +141,24 @@ Window {
             Layout.fillWidth: true
             Layout.fillHeight: true
             curveData: root.currentCurve
-            curveColor: root.selectedFan === 0 ? Theme.quietColor : Theme.performanceColor
+            curveColor: root.profileColor(root.selectedProfile)
 
             onPointMoved: function(index, temp, fan) {
-                var newCurve = root.currentCurve.slice()
-                newCurve[index] = { temp: temp, fan: fan }
+                var newCurve = []
+                for (var i = 0; i < root.currentCurve.length; i++) {
+                    if (i === index) {
+                        newCurve.push({ temp: temp, fan: fan })
+                    } else {
+                        newCurve.push({ temp: root.currentCurve[i].temp, fan: root.currentCurve[i].fan })
+                    }
+                }
 
                 if (root.selectedFan === 0) {
                     FanController.setCpuCurve(newCurve, FanController.cpuCurveEnabled)
                 } else {
                     FanController.setGpuCurve(newCurve, FanController.gpuCurveEnabled)
                 }
+                curveCanvas.requestPaint()
             }
         }
 
@@ -157,13 +175,15 @@ Window {
 
             Button {
                 text: qsTr("Silent")
-                onClicked: applyPreset(0)
+                onClicked: { root.selectedProfile = 0; applyPreset(0) }
 
                 background: Rectangle {
                     implicitHeight: 28
                     radius: Theme.radiusSmall
-                    color: parent.hovered ? Theme.colorWithAlpha(Theme.quietColor, 0.2) : "transparent"
+                    color: root.selectedProfile === 0 ? Theme.colorWithAlpha(Theme.quietColor, 0.3) :
+                           (parent.hovered ? Theme.colorWithAlpha(Theme.quietColor, 0.2) : "transparent")
                     border.color: Theme.quietColor
+                    border.width: root.selectedProfile === 0 ? 2 : 1
                 }
 
                 contentItem: Text {
@@ -176,13 +196,15 @@ Window {
 
             Button {
                 text: qsTr("Balanced")
-                onClicked: applyPreset(1)
+                onClicked: { root.selectedProfile = 1; applyPreset(1) }
 
                 background: Rectangle {
                     implicitHeight: 28
                     radius: Theme.radiusSmall
-                    color: parent.hovered ? Theme.colorWithAlpha(Theme.balancedColor, 0.2) : "transparent"
+                    color: root.selectedProfile === 1 ? Theme.colorWithAlpha(Theme.balancedColor, 0.3) :
+                           (parent.hovered ? Theme.colorWithAlpha(Theme.balancedColor, 0.2) : "transparent")
                     border.color: Theme.balancedColor
+                    border.width: root.selectedProfile === 1 ? 2 : 1
                 }
 
                 contentItem: Text {
@@ -195,13 +217,15 @@ Window {
 
             Button {
                 text: qsTr("Turbo")
-                onClicked: applyPreset(2)
+                onClicked: { root.selectedProfile = 2; applyPreset(2) }
 
                 background: Rectangle {
                     implicitHeight: 28
                     radius: Theme.radiusSmall
-                    color: parent.hovered ? Theme.colorWithAlpha(Theme.performanceColor, 0.2) : "transparent"
+                    color: root.selectedProfile === 2 ? Theme.colorWithAlpha(Theme.performanceColor, 0.3) :
+                           (parent.hovered ? Theme.colorWithAlpha(Theme.performanceColor, 0.2) : "transparent")
                     border.color: Theme.performanceColor
+                    border.width: root.selectedProfile === 2 ? 2 : 1
                 }
 
                 contentItem: Text {
