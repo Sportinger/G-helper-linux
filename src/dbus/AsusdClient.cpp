@@ -65,25 +65,30 @@ void AsusdClient::onPlatformProfileResult(QDBusPendingCallWatcher *watcher)
 
 void AsusdClient::setPlatformProfile(quint32 profile)
 {
-    if (!m_connected) return;
+    if (!m_connected) {
+        qWarning() << "AsusdClient: Not connected, cannot set profile";
+        return;
+    }
 
-    QDBusMessage msg = QDBusMessage::createMethodCall(
-        SERVICE, PATH_PLATFORM, "org.freedesktop.DBus.Properties", "Set");
-    msg << INTERFACE_PLATFORM << "PlatformProfile" << QVariant::fromValue(QDBusVariant(profile));
+    qDebug() << "AsusdClient: Setting platform profile to" << profile;
 
-    QDBusPendingCall call = QDBusConnection::systemBus().asyncCall(msg);
-    auto *watcher = new QDBusPendingCallWatcher(call, this);
-    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, profile](QDBusPendingCallWatcher *w) {
-        QDBusPendingReply<> reply = *w;
-        if (reply.isError()) {
-            qWarning() << "Failed to set platform profile:" << reply.error().message();
-            emit errorOccurred(tr("Failed to set performance profile: %1").arg(reply.error().message()));
-        } else {
-            m_platformProfile = profile;
-            emit platformProfileChanged(profile);
-        }
-        w->deleteLater();
-    });
+    // Use QDBusInterface for cleaner property setting
+    QDBusInterface iface(SERVICE, PATH_PLATFORM, INTERFACE_PLATFORM, QDBusConnection::systemBus());
+    if (!iface.isValid()) {
+        qWarning() << "AsusdClient: Interface not valid:" << iface.lastError().message();
+        return;
+    }
+
+    // Set property directly
+    bool success = iface.setProperty("PlatformProfile", QVariant::fromValue(profile));
+    if (!success) {
+        qWarning() << "AsusdClient: Failed to set PlatformProfile property";
+        emit errorOccurred(tr("Failed to set performance profile"));
+    } else {
+        qDebug() << "AsusdClient: Profile set successfully";
+        m_platformProfile = profile;
+        emit platformProfileChanged(profile);
+    }
 }
 
 void AsusdClient::onPropertiesChanged(const QString &interface, const QVariantMap &changed, const QStringList &invalidated)

@@ -61,8 +61,8 @@ private:
     double m_powerDraw = 0.0;
     bool m_available = false;
 
-    static constexpr const char* BATTERY_PATH = "/sys/class/power_supply/BAT0";
-    static constexpr const char* AC_PATH = "/sys/class/power_supply/AC0";
+    static constexpr const char* BATTERY_PATH = "/sys/class/power_supply/BAT1";
+    static constexpr const char* AC_PATH = "/sys/class/power_supply/ACAD";
 };
 
 #endif // BATTERYCONTROLLER_H
