@@ -255,7 +255,25 @@ void FanController::onProfileChanged(quint32 profile)
         m_currentProfile = newProfile;
         emit currentProfileChanged(newProfile);
         emit fanCurvesChanged();
+
+        // Apply this profile's fan curves to hardware
+        applyCurrentCurvesToHardware();
     }
+}
+
+void FanController::applyCurrentCurvesToHardware()
+{
+    if (!m_available) return;
+
+    qDebug() << "FanController: Applying curves for profile" << m_currentProfile << "to hardware";
+
+    // Send CPU curve
+    m_client->setFanCurve(static_cast<quint32>(m_currentProfile), CpuFan,
+                          m_cpuCurves[m_currentProfile], m_cpuCurveEnabled);
+
+    // Send GPU curve
+    m_client->setFanCurve(static_cast<quint32>(m_currentProfile), GpuFan,
+                          m_gpuCurves[m_currentProfile], m_gpuCurveEnabled);
 }
 
 void FanController::onClientConnected(bool connected)

@@ -66,6 +66,7 @@ private:
     void loadFromSettings();
     void saveToSettings();
     void initializeDefaultCurves();
+    void applyCurrentCurvesToHardware();
 
     AsusdClient *m_client;
     QSettings m_settings;
