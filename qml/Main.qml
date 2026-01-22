@@ -449,16 +449,73 @@ ApplicationWindow {
                             sourceSize: Qt.size(20, 20)
                         }
                         Label {
-                            text: "Battery Charge Limit: " + BatteryController.chargeLimit + "%"
+                            text: "Battery"
                             font.pixelSize: 15
                             font.bold: true
                             color: Theme.textPrimary
                         }
                         Item { Layout.fillWidth: true }
                         Label {
-                            text: BatteryController.isCharging ? "Charging" : "On battery"
+                            text: BatteryController.isCharging ? "Charging: " + BatteryController.currentCharge + "%" : "On battery: " + BatteryController.currentCharge + "%"
                             font.pixelSize: 13
                             color: Theme.textSecondary
+                        }
+                    }
+
+                    // Battery bar
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 12
+
+                        Rectangle {
+                            Layout.preferredWidth: 50
+                            Layout.preferredHeight: 24
+                            color: "transparent"
+                            border.color: Theme.textSecondary
+                            border.width: 2
+                            radius: 4
+
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                anchors.margins: 3
+                                width: Math.max(4, (parent.width - 6) * BatteryController.currentCharge / 100)
+                                color: BatteryController.currentCharge > 20 ? Theme.success : Theme.error
+                                radius: 2
+                            }
+
+                            Rectangle {
+                                anchors.right: parent.right
+                                anchors.rightMargin: -4
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 4
+                                height: 10
+                                color: Theme.textSecondary
+                                radius: 1
+                            }
+                        }
+
+                        Label {
+                            text: BatteryController.currentCharge + "%"
+                            font.pixelSize: 16
+                            font.bold: true
+                            color: Theme.textPrimary
+                        }
+
+                        Item { Layout.fillWidth: true }
+
+                        Label {
+                            text: "Charge Limit"
+                            font.pixelSize: 13
+                            color: Theme.textSecondary
+                        }
+
+                        Label {
+                            text: BatteryController.chargeLimit + "%"
+                            font.pixelSize: 16
+                            font.bold: true
+                            color: Theme.accent
                         }
                     }
 
