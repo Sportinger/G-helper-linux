@@ -1,5 +1,6 @@
 #include "PerformanceController.h"
 #include "AsusdClient.h"
+#include <QDebug>
 
 PerformanceController::PerformanceController(AsusdClient *client, QObject *parent)
     : QObject(parent)
@@ -27,16 +28,31 @@ QString PerformanceController::currentProfileName() const
 
 void PerformanceController::setProfile(int profile)
 {
+    qWarning() << ">>> PerformanceController::setProfile CALLED with:" << profile;
+
     if (!m_available) {
+        qWarning() << ">>> Not available!";
         emit errorOccurred(tr("Performance control is not available"));
         return;
     }
 
     if (profile < Quiet || profile > Performance) {
+        qWarning() << ">>> Invalid profile!";
         emit errorOccurred(tr("Invalid profile: %1").arg(profile));
         return;
     }
 
+    qWarning() << ">>> Current profile was:" << m_currentProfile << "-> Setting to:" << profile;
+
+    // Update UI immediately
+    if (m_currentProfile != profile) {
+        m_currentProfile = profile;
+        emit currentProfileChanged(profile);
+        qWarning() << ">>> Emitted currentProfileChanged";
+    }
+
+    // Then send command to hardware
+    qWarning() << ">>> Calling setPlatformProfile";
     m_client->setPlatformProfile(static_cast<quint32>(profile));
 }
 
@@ -83,10 +99,14 @@ void PerformanceController::refresh()
 
 void PerformanceController::onProfileChanged(quint32 profile)
 {
+    qWarning() << ">>> onProfileChanged (from D-Bus) received:" << profile;
     int newProfile = static_cast<int>(profile);
     if (m_currentProfile != newProfile) {
+        qWarning() << ">>> D-Bus changing profile from" << m_currentProfile << "to" << newProfile;
         m_currentProfile = newProfile;
         emit currentProfileChanged(newProfile);
+    } else {
+        qWarning() << ">>> D-Bus profile same as current, ignoring";
     }
 }
 

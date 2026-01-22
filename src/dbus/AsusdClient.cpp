@@ -4,6 +4,7 @@
 #include <QDebug>
 #include <QRegularExpression>
 #include <QProcess>
+#include <QTimer>
 
 AsusdClient::AsusdClient(QObject *parent)
     : QObject(parent)
@@ -77,25 +78,24 @@ void AsusdClient::setPlatformProfile(quint32 profile)
             return;
     }
 
-    qDebug() << "AsusdClient: Setting platform profile to" << profileName;
+    // Update local state immediately and ignore D-Bus updates for a bit
+    m_platformProfile = profile;
+    m_ignoringProfileUpdates = true;
+    m_profileSetTimer.start();
 
-    // Run asusctl asynchronously to not block UI
-    // UI will update when D-Bus PropertiesChanged signal is received
+    // Run asusctl asynchronously - UI already updated by PerformanceController
     QProcess *process = new QProcess(this);
     connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, process, profile, profileName](int exitCode, QProcess::ExitStatus) {
+            this, [this, process, profileName](int exitCode, QProcess::ExitStatus) {
         if (exitCode != 0) {
             QString error = QString::fromUtf8(process->readAllStandardError());
             qWarning() << "AsusdClient: Failed to set profile:" << error;
             emit errorOccurred(tr("Failed to set performance profile"));
-        } else {
-            qDebug() << "AsusdClient: Profile set successfully to" << profileName;
-            // Update local state and emit signal after successful command
-            if (m_platformProfile != profile) {
-                m_platformProfile = profile;
-                emit platformProfileChanged(profile);
-            }
         }
+        // Stop ignoring after command completes (with small delay for D-Bus)
+        QTimer::singleShot(500, this, [this]() {
+            m_ignoringProfileUpdates = false;
+        });
         process->deleteLater();
     });
 
@@ -108,10 +108,13 @@ void AsusdClient::onPropertiesChanged(const QString &interface, const QVariantMa
 
     if (interface == INTERFACE_PLATFORM) {
         if (changed.contains("PlatformProfile")) {
-            quint32 profile = changed["PlatformProfile"].toUInt();
-            if (m_platformProfile != profile) {
-                m_platformProfile = profile;
-                emit platformProfileChanged(profile);
+            // Ignore D-Bus updates if we recently set the profile ourselves
+            if (!m_ignoringProfileUpdates) {
+                quint32 profile = changed["PlatformProfile"].toUInt();
+                if (m_platformProfile != profile) {
+                    m_platformProfile = profile;
+                    emit platformProfileChanged(profile);
+                }
             }
         }
         if (changed.contains("ChargeControlEndThreshold")) {

@@ -6,6 +6,7 @@
 #include <QDBusInterface>
 #include <QDBusPendingCallWatcher>
 #include <QColor>
+#include <QElapsedTimer>
 #include "DBusTypes.h"
 
 class AsusdClient : public QObject
@@ -76,6 +77,10 @@ private:
     quint32 m_platformProfile = 1; // Balanced
     quint8 m_chargeLimit = 100;
     quint32 m_ledBrightness = 2; // Medium
+
+    // Ignore D-Bus profile updates briefly after we set it ourselves
+    QElapsedTimer m_profileSetTimer;
+    bool m_ignoringProfileUpdates = false;
 };
 
 #endif // ASUSDCLIENT_H
