@@ -10,16 +10,23 @@ Window {
     id: root
     title: qsTr("Fans and Power")
     width: 520
-    height: 500
+    height: 700
     minimumWidth: 480
-    minimumHeight: 450
+    minimumHeight: 600
     color: Theme.background
     flags: Qt.Window
 
     property int selectedFan: 0 // 0 = CPU, 1 = GPU
     property var currentCurve: selectedFan === 0 ? FanController.cpuCurve : FanController.gpuCurve
+    property int mainWindowX: 0
+    property int mainWindowY: 0
 
-    function open() {
+    function open(mainX, mainY) {
+        mainWindowX = mainX
+        mainWindowY = mainY
+        // Position to the left of main window with small gap
+        root.x = mainX - root.width - 8
+        root.y = mainY
         root.show()
         root.raise()
         root.requestActivate()
@@ -187,7 +194,7 @@ Window {
             }
 
             Button {
-                text: qsTr("Performance")
+                text: qsTr("Turbo")
                 onClicked: applyPreset(2)
 
                 background: Rectangle {

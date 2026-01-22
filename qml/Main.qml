@@ -732,9 +732,7 @@ ApplicationWindow {
             fanCurveLoader.active = true
         }
         if (fanCurveLoader.item) {
-            fanCurveLoader.item.show()
-            fanCurveLoader.item.raise()
-            fanCurveLoader.item.requestActivate()
+            fanCurveLoader.item.open(window.x, window.y)
         }
     }
 
