@@ -16,7 +16,7 @@ Window {
     color: Theme.background
     flags: Qt.Window
 
-    property int selectedProfile: 0 // 0 = Silent, 1 = Balanced, 2 = Turbo
+    property int selectedProfile: FanController.currentProfile // Sync with FanController
     property int mainWindowX: 0
     property int mainWindowY: 0
 
@@ -101,8 +101,9 @@ Window {
                         }
 
                         onClicked: {
-                            root.selectedProfile = index
-                            // TODO: Load curves for this profile from storage
+                            FanController.setCurrentProfile(index)
+                            cpuCanvas.reloadFromExternal()
+                            gpuCanvas.reloadFromExternal()
                         }
                     }
                 }
@@ -184,9 +185,9 @@ Window {
             spacing: Theme.spacingSmall
 
             Button {
-                text: qsTr("Reset to Defaults")
+                text: qsTr("Reset Profile")
                 onClicked: {
-                    FanController.resetToDefaults()
+                    FanController.resetCurrentProfileToDefaults()
                     cpuCanvas.reloadFromExternal()
                     gpuCanvas.reloadFromExternal()
                 }
