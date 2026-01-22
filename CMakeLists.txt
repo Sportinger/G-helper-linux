@@ -34,6 +34,7 @@ set(SOURCES
     src/controllers/FanController.cpp
     src/controllers/AuraController.cpp
     src/controllers/SystemMonitor.cpp
+    src/controllers/SlashController.cpp
     src/models/FanCurveModel.cpp
     src/models/AuraModeModel.cpp
     src/tray/TrayManager.cpp
@@ -52,6 +53,7 @@ set(HEADERS
     src/controllers/FanController.h
     src/controllers/AuraController.h
     src/controllers/SystemMonitor.h
+    src/controllers/SlashController.h
     src/models/FanCurveModel.h
     src/models/AuraModeModel.h
     src/tray/TrayManager.h

@@ -17,6 +17,7 @@ using namespace Qt::StringLiterals;
 #include "controllers/FanController.h"
 #include "controllers/AuraController.h"
 #include "controllers/SystemMonitor.h"
+#include "controllers/SlashController.h"
 #include "tray/TrayManager.h"
 
 int main(int argc, char *argv[])
@@ -46,6 +47,7 @@ int main(int argc, char *argv[])
     FanController fanController(&asusdClient);
     AuraController auraController(&asusdClient);
     SystemMonitor systemMonitor;
+    SlashController slashController;
 
     // Initialize tray manager
     TrayManager trayManager(&performanceController, &gpuController);
@@ -63,6 +65,7 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("GHelperLinux", 1, 0, "FanController", &fanController);
     qmlRegisterSingletonInstance("GHelperLinux", 1, 0, "AuraController", &auraController);
     qmlRegisterSingletonInstance("GHelperLinux", 1, 0, "SystemMonitor", &systemMonitor);
+    qmlRegisterSingletonInstance("GHelperLinux", 1, 0, "SlashController", &slashController);
     qmlRegisterSingletonInstance("GHelperLinux", 1, 0, "TrayManager", &trayManager);
 
     // Load main QML

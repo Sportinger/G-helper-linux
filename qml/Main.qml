@@ -428,6 +428,111 @@ ApplicationWindow {
                 }
             }
 
+            // === Slash Lightbar Section ===
+            Item {
+                visible: SlashController.available
+                Layout.fillWidth: true
+                Layout.preferredHeight: sectionSlash.implicitHeight + 24
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                Layout.topMargin: 16
+
+                ColumnLayout {
+                    id: sectionSlash
+                    anchors.fill: parent
+                    spacing: 12
+
+                    RowLayout {
+                        Layout.fillWidth: true
+
+                        Image {
+                            source: "qrc:/icons/led-rainbow.svg"
+                            sourceSize: Qt.size(20, 20)
+                        }
+                        Label {
+                            text: "Slash Lightbar"
+                            font.pixelSize: 15
+                            font.bold: true
+                            color: Theme.textPrimary
+                        }
+                        Item { Layout.fillWidth: true }
+                        Switch {
+                            checked: SlashController.enabled
+                            onCheckedChanged: SlashController.setEnabled(checked)
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        ComboBox {
+                            id: slashModeCombo
+                            Layout.preferredWidth: 140
+                            model: SlashController.availableModes
+                            currentIndex: SlashController.availableModes.indexOf(SlashController.currentMode)
+                            onActivated: SlashController.setMode(currentText)
+
+                            background: Rectangle {
+                                color: Theme.buttonBackground
+                                border.color: Theme.border
+                                radius: 4
+                            }
+                            contentItem: Label {
+                                text: parent.displayText
+                                color: Theme.textPrimary
+                                verticalAlignment: Text.AlignVCenter
+                                leftPadding: 8
+                            }
+                        }
+
+                        Label {
+                            text: "Brightness"
+                            color: Theme.textSecondary
+                            font.pixelSize: 12
+                        }
+
+                        Slider {
+                            Layout.fillWidth: true
+                            from: 0
+                            to: 255
+                            stepSize: 1
+                            value: SlashController.brightness
+                            onPressedChanged: {
+                                if (!pressed) {
+                                    SlashController.setBrightness(Math.round(value))
+                                }
+                            }
+
+                            background: Rectangle {
+                                x: parent.leftPadding
+                                y: parent.topPadding + parent.availableHeight / 2 - height / 2
+                                width: parent.availableWidth
+                                height: 4
+                                radius: 2
+                                color: Theme.border
+
+                                Rectangle {
+                                    width: parent.parent.visualPosition * parent.width
+                                    height: parent.height
+                                    color: Theme.accent
+                                    radius: 2
+                                }
+                            }
+
+                            handle: Rectangle {
+                                x: parent.leftPadding + parent.visualPosition * (parent.availableWidth - width)
+                                y: parent.topPadding + parent.availableHeight / 2 - height / 2
+                                width: 16
+                                height: 16
+                                radius: 8
+                                color: Theme.accent
+                            }
+                        }
+                    }
+                }
+            }
+
             // === Battery Section ===
             Item {
                 Layout.fillWidth: true
