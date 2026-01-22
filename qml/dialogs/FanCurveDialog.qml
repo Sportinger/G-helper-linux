@@ -22,6 +22,13 @@ Window {
     property int mainWindowX: 0
     property int mainWindowY: 0
 
+    onSelectedFanChanged: {
+        // Reload curve when switching between CPU and GPU
+        if (curveCanvas) {
+            curveCanvas.reloadFromExternal()
+        }
+    }
+
     // Profile colors
     function profileColor(profile) {
         switch(profile) {
@@ -143,22 +150,13 @@ Window {
             curveData: root.currentCurve
             curveColor: root.profileColor(root.selectedProfile)
 
-            onPointMoved: function(index, temp, fan) {
-                var newCurve = []
-                for (var i = 0; i < root.currentCurve.length; i++) {
-                    if (i === index) {
-                        newCurve.push({ temp: temp, fan: fan })
-                    } else {
-                        newCurve.push({ temp: root.currentCurve[i].temp, fan: root.currentCurve[i].fan })
-                    }
-                }
-
+            onCurveChanged: function(newCurve) {
+                console.log("Curve changed, saving to FanController")
                 if (root.selectedFan === 0) {
                     FanController.setCpuCurve(newCurve, FanController.cpuCurveEnabled)
                 } else {
                     FanController.setGpuCurve(newCurve, FanController.gpuCurveEnabled)
                 }
-                curveCanvas.requestPaint()
             }
         }
 
@@ -266,6 +264,8 @@ Window {
         } else {
             FanController.setGpuCurve(presetCurve, true)
         }
+        // Reload the canvas with new data
+        curveCanvas.reloadFromExternal()
     }
 
     // Fan curve canvas component
@@ -275,29 +275,76 @@ Window {
         property var curveData: []
         property color curveColor: Theme.accent
         property int dragIndex: -1
-        property real dragX: 0
-        property real dragY: 0
 
-        signal pointMoved(int index, int temp, int fan)
+        // Internal curve data - completely local, not bound to external source
+        property var internalCurve: []
+        property bool initialized: false
 
-        onCurveDataChanged: requestPaint()
+        signal curveChanged(var newCurve)  // Emitted when drag ends
+
+        onCurveDataChanged: {
+            // Only initialize once, or when fan selection changes
+            if (!initialized || internalCurve.length === 0) {
+                initFromExternal()
+            }
+        }
+
+        Component.onCompleted: {
+            initFromExternal()
+        }
+
+        function initFromExternal() {
+            internalCurve = []
+            if (curveData && curveData.length > 0) {
+                for (var i = 0; i < curveData.length; i++) {
+                    internalCurve.push({
+                        temp: curveData[i].temp,
+                        fan: curveData[i].fan
+                    })
+                }
+                initialized = true
+            }
+            requestPaint()
+        }
+
+        function reloadFromExternal() {
+            initialized = false
+            initFromExternal()
+        }
 
         MouseArea {
+            id: dragArea
             anchors.fill: parent
             hoverEnabled: true
+            preventStealing: true
 
             onPressed: function(mouse) {
-                canvas.dragIndex = findNearestPoint(mouse.x, mouse.y)
+                var idx = canvas.findNearestPoint(mouse.x, mouse.y)
+                canvas.dragIndex = idx
             }
 
             onPositionChanged: function(mouse) {
-                if (canvas.dragIndex >= 0) {
-                    var coords = screenToData(mouse.x, mouse.y)
-                    canvas.pointMoved(canvas.dragIndex, coords.temp, coords.fan)
+                if (pressed && canvas.dragIndex >= 0 && canvas.internalCurve.length > 0) {
+                    var coords = canvas.screenToData(mouse.x, mouse.y)
+                    // Update internal curve directly
+                    canvas.internalCurve[canvas.dragIndex].temp = coords.temp
+                    canvas.internalCurve[canvas.dragIndex].fan = coords.fan
+                    canvas.requestPaint()
                 }
             }
 
-            onReleased: {
+            onReleased: function(mouse) {
+                if (canvas.dragIndex >= 0 && canvas.internalCurve.length > 0) {
+                    // Create a copy to emit
+                    var curveCopy = []
+                    for (var i = 0; i < canvas.internalCurve.length; i++) {
+                        curveCopy.push({
+                            temp: canvas.internalCurve[i].temp,
+                            fan: canvas.internalCurve[i].fan
+                        })
+                    }
+                    canvas.curveChanged(curveCopy)
+                }
                 canvas.dragIndex = -1
             }
         }
@@ -307,8 +354,10 @@ Window {
             var w = width - padding * 2
             var h = height - padding * 2
 
-            for (var i = 0; i < curveData.length; i++) {
-                var point = curveData[i]
+            if (!internalCurve || internalCurve.length === 0) return -1
+
+            for (var i = 0; i < internalCurve.length; i++) {
+                var point = internalCurve[i]
                 var x = padding + (point.temp - 30) / 70 * w
                 var y = height - padding - (point.fan / 100) * h
 
@@ -389,15 +438,17 @@ Window {
             ctx.fillText("Fan Speed (%)", 0, 0)
             ctx.restore()
 
-            if (!curveData || curveData.length === 0) return
+            // Use internalCurve for drawing
+            if (!internalCurve || internalCurve.length === 0) return
+            var drawCurve = internalCurve
 
             // Draw curve
             ctx.strokeStyle = curveColor
             ctx.lineWidth = 2
             ctx.beginPath()
 
-            for (var k = 0; k < curveData.length; k++) {
-                var point = curveData[k]
+            for (var k = 0; k < drawCurve.length; k++) {
+                var point = drawCurve[k]
                 var px = padding + (point.temp - 30) / 70 * w
                 var py = padding + h - (point.fan / 100) * h
 
@@ -410,8 +461,8 @@ Window {
             ctx.stroke()
 
             // Draw points
-            for (var m = 0; m < curveData.length; m++) {
-                var pt = curveData[m]
+            for (var m = 0; m < drawCurve.length; m++) {
+                var pt = drawCurve[m]
                 var ptx = padding + (pt.temp - 30) / 70 * w
                 var pty = padding + h - (pt.fan / 100) * h
 

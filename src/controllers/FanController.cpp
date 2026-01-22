@@ -26,8 +26,16 @@ FanController::~FanController() = default;
 
 void FanController::setCpuCurve(const QVariantList &points, bool enabled)
 {
+    qDebug() << "FanController::setCpuCurve called with" << points.size() << "points";
+    if (!points.isEmpty()) {
+        QVariantMap first = points.first().toMap();
+        qDebug() << "  First point: temp=" << first["temp"] << "fan=" << first["fan"];
+    }
+
     m_cpuCurve = points;
     m_cpuCurveEnabled = enabled;
+
+    qDebug() << "  Stored m_cpuCurve has" << m_cpuCurve.size() << "points";
     emit fanCurvesChanged();
 
     // Send to daemon if available

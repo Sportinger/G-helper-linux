@@ -118,9 +118,16 @@ int main(int argc, char *argv[])
 
     QObject::connect(&dbusWatcher, &DBusWatcher::supergfxConnectedChanged, [&](bool connected) {
         if (connected) {
+            superGfxClient.reconnect();
             gpuController.refresh();
         }
     });
+
+    // Initial reconnect if services are already available but clients missed it
+    if (dbusWatcher.supergfxConnected() && !superGfxClient.isConnected()) {
+        superGfxClient.reconnect();
+        gpuController.refresh();
+    }
 
     return app.exec();
 }

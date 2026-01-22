@@ -36,6 +36,32 @@ void SuperGfxClient::refresh()
     fetchGpuPower();
 }
 
+void SuperGfxClient::reconnect()
+{
+    if (m_connected) return;
+
+    // Try to reconnect
+    if (m_interface) {
+        delete m_interface;
+        m_interface = nullptr;
+    }
+
+    QDBusConnection bus = QDBusConnection::systemBus();
+    m_interface = new QDBusInterface(SERVICE, PATH, INTERFACE, bus, this);
+    bool nowConnected = m_interface->isValid();
+
+    if (nowConnected && !m_connected) {
+        m_connected = true;
+
+        // Connect to signals
+        bus.connect(SERVICE, PATH, INTERFACE,
+                    "NotifyGfxStatus", this, SLOT(onNotifyGfxStatus(quint32)));
+
+        emit connectedChanged(true);
+        refresh();
+    }
+}
+
 void SuperGfxClient::fetchCurrentMode()
 {
     QDBusPendingCall call = m_interface->asyncCall("Mode");

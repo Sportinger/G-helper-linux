@@ -40,6 +40,7 @@ public:
 
     Q_INVOKABLE void setMode(int mode);
     Q_INVOKABLE void refresh();
+    Q_INVOKABLE void reconnect();
     Q_INVOKABLE QString modeName(int mode) const;
     Q_INVOKABLE QString modeDescription(int mode) const;
     Q_INVOKABLE bool requiresLogout(int fromMode, int toMode) const;
