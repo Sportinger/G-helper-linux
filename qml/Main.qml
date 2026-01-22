@@ -348,7 +348,7 @@ ApplicationWindow {
                                 Rectangle {
                                     width: 24
                                     height: 24
-                                    color: AuraController.currentColor
+                                    color: AuraController.color1
                                     border.color: Theme.border
                                     radius: 2
 
@@ -456,7 +456,13 @@ ApplicationWindow {
                         }
                         Item { Layout.fillWidth: true }
                         Label {
-                            text: BatteryController.isCharging ? "Charging: " + BatteryController.currentCharge + "%" : "On battery: " + BatteryController.currentCharge + "%"
+                            text: {
+                                if (BatteryController.isCharging) {
+                                    return "Charging: " + BatteryController.powerDraw.toFixed(1) + "W"
+                                } else {
+                                    return "Discharging: " + BatteryController.powerDraw.toFixed(1) + "W"
+                                }
+                            }
                             font.pixelSize: 13
                             color: Theme.textSecondary
                         }
@@ -649,7 +655,7 @@ ApplicationWindow {
                     MouseArea {
                         anchors.fill: parent
                         onClicked: {
-                            AuraController.setColor(modelData)
+                            AuraController.setColor1(modelData)
                             colorDialog.close()
                         }
                     }
