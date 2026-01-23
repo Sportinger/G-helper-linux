@@ -22,6 +22,8 @@ void SuperGfxClient::setupConnections()
     m_interface = new QDBusInterface(SERVICE, PATH, INTERFACE, bus, this);
     m_connected = m_interface->isValid();
 
+    qDebug() << "SuperGfxClient: Connected to supergfxd:" << m_connected;
+
     if (m_connected) {
         // Connect to signals
         bus.connect(SERVICE, PATH, INTERFACE,
@@ -29,6 +31,8 @@ void SuperGfxClient::setupConnections()
 
         refresh();
         startPowerPolling();
+    } else {
+        qWarning() << "SuperGfxClient: Failed to connect to supergfxd";
     }
 }
 
@@ -134,9 +138,10 @@ void SuperGfxClient::onPowerResult(QDBusPendingCallWatcher *watcher)
 {
     QDBusPendingReply<quint32> reply = *watcher;
     if (reply.isError()) {
-        qWarning() << "Failed to get GPU power status:" << reply.error().message();
+        qWarning() << "SuperGfxClient: Failed to get GPU power status:" << reply.error().message();
     } else {
         quint32 power = reply.value();
+        qDebug() << "SuperGfxClient: GPU power raw value:" << power;
         QString powerStr;
         switch (power) {
             case 0: powerStr = "Active"; break;
@@ -146,6 +151,7 @@ void SuperGfxClient::onPowerResult(QDBusPendingCallWatcher *watcher)
             case 4: powerStr = "AsusMuxDiscreet"; break;
             default: powerStr = "Unknown"; break;
         }
+        qDebug() << "SuperGfxClient: GPU power string:" << powerStr;
         if (m_gpuPower != powerStr) {
             m_gpuPower = powerStr;
             emit gpuPowerChanged(powerStr);

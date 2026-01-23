@@ -269,9 +269,10 @@ ApplicationWindow {
                     }
 
                     Label {
-                        text: "dGPU Power: " + (GpuController.dgpuActive ? "Active" : "Suspended")
+                        text: "dGPU: " + GpuController.gpuPower + (GpuController.gpuPower === "Active" && SystemMonitor.dgpuUsage > 0 ? " (" + Math.round(SystemMonitor.dgpuUsage) + "%)" : "")
                         font.pixelSize: 12
-                        color: Theme.textSecondary
+                        color: GpuController.gpuPower === "Active" ? Theme.warning :
+                               GpuController.gpuPower === "Off" ? Theme.success : Theme.textSecondary
                     }
                 }
             }
