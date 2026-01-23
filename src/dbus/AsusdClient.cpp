@@ -398,8 +398,7 @@ void AsusdClient::setFanCurve(quint32 profile, quint32 fanType, const QVariantLi
 
             QStringList enableArgs;
             enableArgs << "fan-curve" << "--mod-profile" << profileName
-                       << "--fan" << fanName
-                       << "--enable-fan-curve" << (enabled ? "true" : "false");
+                       << "--enable-fan-curves" << (enabled ? "true" : "false");
             enableProcess->start("asusctl", enableArgs);
         }
         process->deleteLater();
