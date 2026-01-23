@@ -16,6 +16,8 @@ class SystemMonitor : public QObject
     Q_PROPERTY(int gpuFanPercent READ gpuFanPercent NOTIFY gpuFanPercentChanged)
     Q_PROPERTY(double cpuUsage READ cpuUsage NOTIFY cpuUsageChanged)
     Q_PROPERTY(double gpuUsage READ gpuUsage NOTIFY gpuUsageChanged)
+    Q_PROPERTY(double dgpuUsage READ dgpuUsage NOTIFY dgpuUsageChanged)
+    Q_PROPERTY(int dgpuTemp READ dgpuTemp NOTIFY dgpuTempChanged)
     Q_PROPERTY(int memoryUsed READ memoryUsed NOTIFY memoryChanged)
     Q_PROPERTY(int memoryTotal READ memoryTotal NOTIFY memoryChanged)
     Q_PROPERTY(double apuPower READ apuPower NOTIFY apuPowerChanged)
@@ -38,6 +40,8 @@ public:
     int gpuFanPercent() const { return m_gpuFanPercent; }
     double cpuUsage() const { return m_cpuUsage; }
     double gpuUsage() const { return m_gpuUsage; }
+    double dgpuUsage() const { return m_dgpuUsage; }
+    int dgpuTemp() const { return m_dgpuTemp; }
     int memoryUsed() const { return m_memoryUsed; }
     int memoryTotal() const { return m_memoryTotal; }
     double apuPower() const { return m_apuPower; }
@@ -61,6 +65,8 @@ signals:
     void gpuFanPercentChanged(int percent);
     void cpuUsageChanged(double usage);
     void gpuUsageChanged(double usage);
+    void dgpuUsageChanged(double usage);
+    void dgpuTempChanged(int temp);
     void memoryChanged();
     void apuPowerChanged(double power);
     void systemPowerChanged(double power);
@@ -79,6 +85,7 @@ private:
     int readFanSpeed(const QString &path);
     void readCpuUsage();
     void readGpuUsage();
+    void readDgpuInfo();
     void readMemoryInfo();
     void readApuPower();
     void readDisplayBrightness();
@@ -106,6 +113,8 @@ private:
     int m_gpuFanPercent = 0;
     double m_cpuUsage = 0.0;
     double m_gpuUsage = 0.0;
+    double m_dgpuUsage = 0.0;
+    int m_dgpuTemp = 0;
     int m_memoryUsed = 0;
     int m_memoryTotal = 0;
     double m_apuPower = 0.0;

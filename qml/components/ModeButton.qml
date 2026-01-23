@@ -14,12 +14,12 @@ Control {
 
     signal clicked()
 
-    implicitWidth: Theme.modeButtonSize
-    implicitHeight: Theme.modeButtonSize + 24
+    implicitWidth: Theme.modeButtonWidth
+    implicitHeight: Theme.modeButtonHeight + 18
 
     background: Rectangle {
-        width: Theme.modeButtonSize
-        height: Theme.modeButtonSize
+        width: Theme.modeButtonWidth
+        height: Theme.modeButtonHeight
         radius: Theme.radiusMedium
         color: root.selected ? Theme.colorWithAlpha(root.accentColor, 0.2) :
                mouseArea.containsMouse ? Theme.surfaceLight : Theme.surface
@@ -36,11 +36,11 @@ Control {
     }
 
     contentItem: ColumnLayout {
-        spacing: Theme.spacingSmall
+        spacing: Theme.spacingTiny
 
         Item {
-            Layout.preferredWidth: Theme.modeButtonSize
-            Layout.preferredHeight: Theme.modeButtonSize
+            Layout.preferredWidth: Theme.modeButtonWidth
+            Layout.preferredHeight: Theme.modeButtonHeight
 
             Image {
                 anchors.centerIn: parent

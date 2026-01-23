@@ -3,6 +3,7 @@
 #include <QTextStream>
 #include <QDir>
 #include <QDebug>
+#include <QProcess>
 
 SystemMonitor::SystemMonitor(QObject *parent)
     : QObject(parent)
@@ -171,6 +172,7 @@ void SystemMonitor::update()
     // Read CPU/GPU usage and power
     readCpuUsage();
     readGpuUsage();
+    readDgpuInfo();
     readMemoryInfo();
     readApuPower();
     readDisplayBrightness();
@@ -257,8 +259,39 @@ void SystemMonitor::readGpuUsage()
         return;
     }
 
-    // Try NVIDIA GPU usage via nvidia-smi (would need parsing)
-    // For now, leave as 0 if not AMD
+    // For iGPU (AMD), we use the sysfs path above
+    // dGPU (NVIDIA) is handled separately in readDgpuInfo()
+}
+
+void SystemMonitor::readDgpuInfo()
+{
+    // Read NVIDIA dGPU usage and temperature via nvidia-smi
+    QProcess process;
+    process.start("nvidia-smi", QStringList() << "--query-gpu=utilization.gpu,temperature.gpu"
+                                               << "--format=csv,noheader,nounits");
+    if (!process.waitForFinished(500)) {
+        // nvidia-smi not available or timeout
+        return;
+    }
+
+    QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+    if (output.isEmpty()) return;
+
+    QStringList values = output.split(",");
+    if (values.size() >= 2) {
+        double usage = values[0].trimmed().toDouble();
+        int temp = values[1].trimmed().toInt();
+
+        if (qAbs(m_dgpuUsage - usage) > 0.5) {
+            m_dgpuUsage = usage;
+            emit dgpuUsageChanged(usage);
+        }
+
+        if (m_dgpuTemp != temp) {
+            m_dgpuTemp = temp;
+            emit dgpuTempChanged(temp);
+        }
+    }
 }
 
 void SystemMonitor::readMemoryInfo()

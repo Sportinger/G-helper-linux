@@ -117,13 +117,14 @@ Rectangle {
             }
         }
 
-        // GPU Power status
+        // GPU Power and Usage status
         RowLayout {
             Layout.fillWidth: true
-            visible: GpuController.available && GpuController.gpuPower !== ""
+            visible: GpuController.available
+            spacing: Theme.spacingMedium
 
             Text {
-                text: qsTr("dGPU Power:")
+                text: qsTr("dGPU:")
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.textSecondary
             }
@@ -134,6 +135,26 @@ Rectangle {
                 font.bold: true
                 color: GpuController.gpuPower === "Off" ? Theme.success :
                        GpuController.gpuPower === "Active" ? Theme.warning : Theme.textSecondary
+            }
+
+            Item { Layout.fillWidth: true }
+
+            // dGPU Usage (only show when active)
+            Text {
+                visible: GpuController.gpuPower === "Active" && SystemMonitor.dgpuUsage > 0
+                text: qsTr("Usage: %1%").arg(Math.round(SystemMonitor.dgpuUsage))
+                font.pixelSize: Theme.fontSizeSmall
+                color: Theme.textSecondary
+            }
+
+            // dGPU Temperature
+            Text {
+                visible: GpuController.gpuPower === "Active" && SystemMonitor.dgpuTemp > 0
+                text: qsTr("%1°C").arg(SystemMonitor.dgpuTemp)
+                font.pixelSize: Theme.fontSizeSmall
+                font.bold: true
+                color: SystemMonitor.dgpuTemp > 80 ? Theme.error :
+                       SystemMonitor.dgpuTemp > 70 ? Theme.warning : Theme.success
             }
         }
 

@@ -58,9 +58,10 @@ QtObject {
 
     // Component sizes
     readonly property int buttonHeight: 36
-    readonly property int modeButtonSize: 80
+    readonly property int modeButtonWidth: 90
+    readonly property int modeButtonHeight: 56
     readonly property int iconSize: 24
-    readonly property int iconSizeLarge: 32
+    readonly property int iconSizeLarge: 28
 
     // Animations
     readonly property int animationFast: 100

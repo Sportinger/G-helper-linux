@@ -11,7 +11,7 @@ RowLayout {
 
     signal modeSelected(int index)
 
-    spacing: Theme.spacingMedium
+    spacing: Theme.spacingSmall
 
     Repeater {
         model: root.model
