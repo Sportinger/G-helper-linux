@@ -3,8 +3,12 @@
 ## App starten
 
 ```bash
-env QT_QPA_PLATFORM=xcb /home/admin/Dokumente/G-helper-linux/build/g-helper-linux &
+pkill -9 -f g-helper-linux 2>/dev/null; sleep 0.5; env QT_QPA_PLATFORM=xcb /home/admin/Dokumente/G-helper-linux/build/g-helper-linux 2>&1 &
+sleep 2
+pgrep -f g-helper-linux && echo "App läuft"
 ```
+
+Wichtig: Immer alte Prozesse killen, 2 Sekunden warten, und dann prüfen ob App läuft.
 
 ## Git Workflow
 
