@@ -42,7 +42,8 @@ ApplicationWindow {
 
     // Asks for confirmation if the switch needs a reboot
     function requestGpuMode(mode) {
-        if (mode === GpuController.currentMode)
+        // Clicking the current mode while a switch is pending cancels it
+        if (mode === GpuController.currentMode && !GpuController.switchPending)
             return
         var warning = GpuController.confirmationText(mode)
         if (warning !== "") {
@@ -102,6 +103,11 @@ ApplicationWindow {
 
     Connections {
         target: GpuController
+        // Switches triggered from the tray while the window is hidden
+        function onSwitchPendingChanged(pending) {
+            if (pending && !window.visible)
+                TrayManager.showMessage(qsTr("GPU mode"), GpuController.pendingText)
+        }
         function onUserActionRequired(message) {
             gpuActionDialog.message = message
             if (window.visible)
@@ -156,6 +162,7 @@ ApplicationWindow {
         property string label
         property url iconSource
         property bool selected: false
+        property bool pending: false      // queued for the next restart
         property color selectedColor: Theme.accent
         property bool tileEnabled: true
         property string tooltip: ""
@@ -166,8 +173,8 @@ ApplicationWindow {
         Layout.preferredHeight: 64
         radius: 5
         color: tileMouse.containsMouse && tileEnabled ? Theme.buttonHover : Theme.buttonBackground
-        border.width: selected ? 2 : 0
-        border.color: selectedColor
+        border.width: selected || pending ? 2 : 0
+        border.color: selected ? selectedColor : Theme.colorCustom
         opacity: tileEnabled ? 1.0 : 0.4
 
         Column {
@@ -470,6 +477,7 @@ ApplicationWindow {
                             label: modelData.name
                             iconSource: modelData.icon
                             selected: GpuController.currentMode === modelData.mode
+                            pending: GpuController.switchPending && GpuController.pendingMode === modelData.mode
                             selectedColor: gpuColor(modelData.mode)
                             tileEnabled: GpuController.available
                                          && GpuController.supportedModes.indexOf(modelData.mode) >= 0
@@ -479,40 +487,69 @@ ApplicationWindow {
                     }
                 }
 
-                // One status line: pending switch, missing daemon or dGPU state
-                Label {
+                // One status line: pending switch, missing backend or dGPU state
+                RowLayout {
                     Layout.fillWidth: true
-                    font.pixelSize: 12
-                    elide: Text.ElideRight
-                    color: GpuController.switchPending ? Theme.warning : Theme.textSecondary
-                    text: {
-                        if (GpuController.switchPending)
-                            return qsTr("Pending: %1").arg(GpuController.pendingText)
-                        var state = GpuController.available ? GpuController.gpuPower
-                                  : (SystemMonitor.dgpuState === "active" ? "Active"
-                                     : SystemMonitor.dgpuState === "suspended" ? "Suspended"
-                                     : SystemMonitor.dgpuState)
-                        var line = state !== "" ? "dGPU: " + state : ""
-                        if (SystemMonitor.dgpuUsage > 0)
-                            line += " · " + Math.round(SystemMonitor.dgpuUsage) + "%"
-                        if (!GpuController.available)
-                            line += (line !== "" ? " · " : "") + qsTr("GPU switching not available yet")
-                        return line
+                    Layout.preferredHeight: 24
+                    spacing: 8
+
+                    Label {
+                        Layout.fillWidth: true
+                        font.pixelSize: 12
+                        elide: Text.ElideRight
+                        color: GpuController.switchPending ? Theme.colorCustom : Theme.textSecondary
+                        text: {
+                            if (GpuController.switchPending)
+                                return qsTr("Pending: %1").arg(GpuController.pendingText)
+                            if (!GpuController.available)
+                                return qsTr("GPU switching needs asusd (asus-armoury) or supergfxd")
+                            var state = GpuController.gpuPower
+                            if (state === "") {
+                                // asusd backend: use the kernel's runtime PM state
+                                state = SystemMonitor.dgpuState === "active" ? "Active"
+                                      : SystemMonitor.dgpuState === "suspended" ? "Suspended"
+                                      : SystemMonitor.dgpuState !== "" ? SystemMonitor.dgpuState
+                                      : "Off"
+                            }
+                            var line = "dGPU: " + state
+                            if (SystemMonitor.dgpuUsage > 0)
+                                line += " · " + Math.round(SystemMonitor.dgpuUsage) + "%"
+                            return line
+                        }
+                    }
+
+                    FlatButton {
+                        visible: GpuController.rebootRequired
+                        Layout.preferredHeight: 24
+                        Layout.preferredWidth: 130
+                        text: qsTr("Restart now")
+                        onClicked: GpuController.rebootNow()
                     }
                 }
 
                 Item { Layout.preferredHeight: 2 }
 
                 // === Keyboard ===
-                SectionHeader {
-                    iconSource: "qrc:/icons/keyboard.svg"
-                    title: qsTr("Laptop Keyboard")
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 7
+
+                    SectionHeader {
+                        iconSource: "qrc:/icons/keyboard.svg"
+                        title: qsTr("Laptop Keyboard")
+                    }
+                    DarkSwitch {
+                        enabled: AuraController.available
+                        checked: AuraController.lightOn
+                        onToggled: AuraController.setLightOn(checked)
+                    }
                 }
 
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 9
-                    enabled: AuraController.available
+                    enabled: AuraController.available && AuraController.lightOn
+                    opacity: enabled ? 1.0 : 0.45
 
                     DarkCombo {
                         id: auraModeCombo
@@ -559,19 +596,21 @@ ApplicationWindow {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 10
-                    enabled: AuraController.available
+                    enabled: AuraController.available && AuraController.lightOn
+                    opacity: enabled ? 1.0 : 0.45
 
                     Label {
                         text: qsTr("Brightness")
                         font.pixelSize: 13
                         color: Theme.textSecondary
                     }
+                    // Low..High; "off" is the switch in the header
                     BlueSlider {
-                        from: 0
+                        from: 1
                         to: 3
                         stepSize: 1
                         snapMode: Slider.SnapAlways
-                        value: AuraController.brightness
+                        value: Math.max(1, AuraController.brightness)
                         // onMoved only fires on user interaction, so the
                         // hardware isn't written when the value is loaded
                         onMoved: AuraController.setBrightness(Math.round(value))

@@ -76,6 +76,20 @@ public:
     void setFanCurvesEnabled(int profile, bool enabled);
     void resetFanCurves(int profile);
 
+    // GPU mode via the kernel asus-armoury driver (dgpu_disable, gpu_mux_mode).
+    // asusd queues GPU writes and applies them at shutdown, so a change
+    // becomes active after the next reboot. -1 = not available / not queued.
+    bool hasArmouryGpu() const { return m_hasDgpuDisable; }
+    bool hasGpuMux() const { return m_hasGpuMux; }
+    int dgpuDisable() const { return m_dgpuDisable; }
+    int dgpuDisableQueued() const { return m_dgpuDisableQueued; }
+    int gpuMux() const { return m_gpuMux; }
+    int gpuMuxQueued() const { return m_gpuMuxQueued; }
+    // Queue new values (-1 leaves an attribute untouched). Setting the
+    // current value clears a queued change.
+    void setGpuAttributes(int dgpuDisable, int gpuMux);
+    void fetchArmouryGpu();
+
     void refresh();
 
     static int profileFromDbus(quint32 dbusProfile);
@@ -99,12 +113,14 @@ signals:
     void supportedAuraModesChanged();
     void fanCurvesReceived(int profile, const QVariantList &curves);
     void fanCurvesUnavailable();
+    void armouryGpuChanged();
     void errorOccurred(const QString &error);
 
 private slots:
     void onServiceRegistered();
     void onServiceUnregistered();
     void onPropertiesChanged(const QString &interface, const QVariantMap &changed, const QStringList &invalidated);
+    void onArmouryPropertiesChanged(const QString &interface, const QVariantMap &changed, const QStringList &invalidated);
 
 private:
     void connectToService();
@@ -127,6 +143,8 @@ private:
     static constexpr const char* INTERFACE_PLATFORM = "xyz.ljones.Platform";
     static constexpr const char* INTERFACE_AURA = "xyz.ljones.Aura";
     static constexpr const char* INTERFACE_FAN_CURVES = "xyz.ljones.FanCurves";
+    static constexpr const char* INTERFACE_ARMOURY = "xyz.ljones.AsusArmoury";
+    static constexpr const char* ARMOURY_ROOT = "/xyz/ljones/asus_armoury";
     static constexpr const char* INTERFACE_PROPERTIES = "org.freedesktop.DBus.Properties";
 
     QDBusServiceWatcher *m_serviceWatcher = nullptr;
@@ -134,6 +152,13 @@ private:
     QString m_slashPath;
     bool m_slashModeIsByte = false;
     bool m_fanCurveStructs = true;   // asusd 6.x uses (yyyyyyyy)
+
+    bool m_hasDgpuDisable = false;
+    bool m_hasGpuMux = false;
+    int m_dgpuDisable = -1;
+    int m_dgpuDisableQueued = -1;
+    int m_gpuMux = -1;
+    int m_gpuMuxQueued = -1;
 
     bool m_connected = false;
     int m_platformProfile = ProfileBalanced;

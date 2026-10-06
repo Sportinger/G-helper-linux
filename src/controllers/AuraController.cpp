@@ -1,6 +1,7 @@
 #include "AuraController.h"
 #include "AsusdClient.h"
 #include <QDebug>
+#include <QSettings>
 
 AuraController::AuraController(AsusdClient *client, QObject *parent)
     : QObject(parent)
@@ -14,6 +15,10 @@ AuraController::AuraController(AsusdClient *client, QObject *parent)
             this, &AuraController::onModeDataChanged);
     connect(m_client, &AsusdClient::supportedAuraModesChanged,
             this, &AuraController::updateAvailableModes);
+
+    QSettings settings("g-helper-linux", "g-helper-linux");
+    m_lastBrightness = qBound(int(BrightnessLow), settings.value("Keyboard/lastBrightness", int(BrightnessMedium)).toInt(),
+                              int(BrightnessHigh));
 
     updateAvailableModes();
     updateAvailability();
@@ -71,6 +76,11 @@ void AuraController::setBrightness(int level)
         return;
 
     m_client->setLedBrightness(static_cast<quint32>(level));
+}
+
+void AuraController::setLightOn(bool on)
+{
+    setBrightness(on ? m_lastBrightness : BrightnessOff);
 }
 
 void AuraController::setMode(int mode)
@@ -164,6 +174,11 @@ bool AuraController::modeUsesSpeed(int mode) const
 void AuraController::onBrightnessChanged(quint32 brightness)
 {
     const int newBrightness = static_cast<int>(brightness);
+    if (newBrightness > BrightnessOff && newBrightness != m_lastBrightness) {
+        m_lastBrightness = qMin(newBrightness, int(BrightnessHigh));
+        QSettings settings("g-helper-linux", "g-helper-linux");
+        settings.setValue("Keyboard/lastBrightness", m_lastBrightness);
+    }
     if (m_brightness != newBrightness) {
         m_brightness = newBrightness;
         emit brightnessChanged(newBrightness);

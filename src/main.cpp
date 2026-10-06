@@ -60,7 +60,7 @@ int main(int argc, char *argv[])
 
     // Initialize controllers
     PerformanceController performanceController(&asusdClient);
-    GpuController gpuController(&superGfxClient);
+    GpuController gpuController(&superGfxClient, &asusdClient);
     BatteryController batteryController(&asusdClient);
     FanController fanController(&asusdClient);
     AuraController auraController(&asusdClient);

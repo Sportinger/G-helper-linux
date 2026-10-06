@@ -1,42 +1,80 @@
 #include "GpuController.h"
 #include "SuperGfxClient.h"
+#include "AsusdClient.h"
 #include "PowerSupply.h"
+#include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDBusPendingCallWatcher>
+#include <QDBusPendingReply>
 #include <QDebug>
 #include <QSettings>
 
-GpuController::GpuController(SuperGfxClient *client, QObject *parent)
+GpuController::GpuController(SuperGfxClient *superGfx, AsusdClient *asusd, QObject *parent)
     : QObject(parent)
-    , m_client(client)
+    , m_superGfx(superGfx)
+    , m_asusd(asusd)
 {
-    connect(m_client, &SuperGfxClient::currentModeChanged,
-            this, &GpuController::onModeChanged);
-    connect(m_client, &SuperGfxClient::pendingModeChanged,
-            this, &GpuController::onPendingModeChanged);
-    connect(m_client, &SuperGfxClient::switchPendingChanged,
-            this, &GpuController::onSwitchPendingChanged);
-    connect(m_client, &SuperGfxClient::gpuPowerChanged,
-            this, &GpuController::onGpuPowerChanged);
-    connect(m_client, &SuperGfxClient::connectedChanged,
-            this, &GpuController::onClientConnected);
-    connect(m_client, &SuperGfxClient::supportedModesChanged,
-            this, &GpuController::updateSupportedModes);
-    connect(m_client, &SuperGfxClient::userActionRequired,
-            this, &GpuController::onUserActionRequired);
-    connect(m_client, &SuperGfxClient::errorOccurred,
-            this, &GpuController::errorOccurred);
+    // asus-armoury via asusd (preferred)
+    connect(m_asusd, &AsusdClient::connectedChanged, this, &GpuController::updateBackend);
+    connect(m_asusd, &AsusdClient::armouryGpuChanged, this, &GpuController::onArmouryChanged);
+
+    // supergfxd (fallback)
+    connect(m_superGfx, &SuperGfxClient::connectedChanged, this, &GpuController::updateBackend);
+    connect(m_superGfx, &SuperGfxClient::currentModeChanged, this, &GpuController::onSuperGfxModeChanged);
+    connect(m_superGfx, &SuperGfxClient::pendingModeChanged, this, &GpuController::onSuperGfxPendingChanged);
+    connect(m_superGfx, &SuperGfxClient::switchPendingChanged, this, &GpuController::onSuperGfxPendingChanged);
+    connect(m_superGfx, &SuperGfxClient::supportedModesChanged, this, &GpuController::updateSupportedModes);
+    connect(m_superGfx, &SuperGfxClient::gpuPowerChanged, this, &GpuController::onGpuPowerChanged);
+    connect(m_superGfx, &SuperGfxClient::userActionRequired, this, &GpuController::onUserActionRequired);
 
     QSettings settings("g-helper-linux", "g-helper-linux");
     m_optimized = settings.value("Gpu/optimized", false).toBool();
     m_onBattery = !PowerSupply::isOnAc();
 
-    m_available = m_client->isConnected();
-    if (m_available) {
-        m_gpuPower = m_client->gpuPower();
-        updateSupportedModes();
-    }
+    updateBackend();
 }
 
 GpuController::~GpuController() = default;
+
+// --- Backend selection -------------------------------------------------------
+
+void GpuController::updateBackend()
+{
+    Backend backend = NoBackend;
+    if (m_asusd->isConnected() && m_asusd->hasArmouryGpu())
+        backend = ArmouryBackend;
+    else if (m_superGfx->isConnected())
+        backend = SuperGfxBackend;
+
+    if (backend != m_backend) {
+        qDebug() << "GpuController: backend" << (backend == ArmouryBackend ? "asusd (asus-armoury)"
+                                                 : backend == SuperGfxBackend ? "supergfxd" : "none");
+        m_backend = backend;
+        m_modeKnown = (backend == ArmouryBackend && m_asusd->dgpuDisable() >= 0)
+                      || (backend == SuperGfxBackend && m_gfxMode >= 0);
+        emit availableChanged(isAvailable());
+    }
+
+    if (m_backend == SuperGfxBackend)
+        onGpuPowerChanged(m_superGfx->gpuPower());
+    else
+        onGpuPowerChanged(QString());
+
+    updateSupportedModes();
+    updatePending();
+    emitModeIfChanged();
+}
+
+QString GpuController::backendName() const
+{
+    switch (m_backend) {
+        case ArmouryBackend: return QStringLiteral("asusd");
+        case SuperGfxBackend: return QStringLiteral("supergfxd");
+        default: return QString();
+    }
+}
+
+// --- Mode mapping --------------------------------------------------------------
 
 int GpuController::gfxToUi(int gfxMode)
 {
@@ -58,29 +96,51 @@ int GpuController::uiToGfx(int uiMode)
     }
 }
 
+int GpuController::armouryMode(int dgpuDisable, int mux) const
+{
+    if (dgpuDisable < 0)
+        return Unknown;
+    if (m_asusd->hasGpuMux() && mux == 0)
+        return Ultimate;
+    return dgpuDisable == 1 ? Eco : Standard;
+}
+
+int GpuController::hardwareMode() const
+{
+    switch (m_backend) {
+        case ArmouryBackend:
+            return armouryMode(m_asusd->dgpuDisable(), m_asusd->gpuMux());
+        case SuperGfxBackend:
+            return m_modeKnown ? gfxToUi(m_gfxMode) : Unknown;
+        default:
+            return Unknown;
+    }
+}
+
 int GpuController::currentMode() const
 {
-    if (m_optimized && (m_gfxMode == SuperGfxClient::Integrated || m_gfxMode == SuperGfxClient::Hybrid))
+    const int hw = hardwareMode();
+    if (m_optimized && (hw == Eco || hw == Standard))
         return Optimized;
-    return gfxToUi(m_gfxMode);
+    return hw;
 }
 
 QString GpuController::currentModeName() const
 {
-    if (!m_modeKnown)
+    if (!isAvailable() || !m_modeKnown)
         return tr("Unknown");
 
-    const int ui = gfxToUi(m_gfxMode);
+    const int hw = hardwareMode();
     if (currentMode() == Optimized)
-        return tr("Optimized (%1)").arg(modeName(ui));
-    if (ui == Unknown)
+        return tr("Optimized (%1)").arg(modeName(hw));
+    if (hw == Unknown && m_backend == SuperGfxBackend)
         return SuperGfxClient::modeName(m_gfxMode);
-    return modeName(ui);
+    return modeName(hw);
 }
 
 int GpuController::pendingMode() const
 {
-    return gfxToUi(m_client->pendingMode());
+    return m_switchPending ? m_pendingMode : Unknown;
 }
 
 QString GpuController::pendingText() const
@@ -88,29 +148,53 @@ QString GpuController::pendingText() const
     if (!m_switchPending)
         return QString();
 
-    const int pending = m_client->pendingMode();
+    if (m_backend == ArmouryBackend)
+        return tr("%1 after restart").arg(modeName(m_pendingMode));
+
+    const int pending = m_superGfx->pendingMode();
     const int ui = gfxToUi(pending);
     const QString name = (ui == Unknown) ? SuperGfxClient::modeName(pending) : modeName(ui);
-    switch (m_client->pendingAction()) {
-        case SuperGfxClient::ActionReboot: return tr("%1 after reboot").arg(name);
+    switch (m_superGfx->pendingAction()) {
+        case SuperGfxClient::ActionReboot: return tr("%1 after restart").arg(name);
         case SuperGfxClient::ActionLogout: return tr("%1 after logout").arg(name);
         default: return tr("%1 pending").arg(name);
     }
 }
 
+bool GpuController::rebootRequired() const
+{
+    if (!m_switchPending)
+        return false;
+    if (m_backend == ArmouryBackend)
+        return true;
+    return m_backend == SuperGfxBackend && m_superGfx->pendingAction() == SuperGfxClient::ActionReboot;
+}
+
 bool GpuController::isModeSupported(int mode) const
 {
-    const QList<int> modes = m_client->supportedModes();
-    if (mode == Optimized)
-        return modes.contains(SuperGfxClient::Integrated) && modes.contains(SuperGfxClient::Hybrid);
-    const int gfx = uiToGfx(mode);
-    return gfx >= 0 && modes.contains(gfx);
+    switch (m_backend) {
+        case ArmouryBackend:
+            if (mode == Ultimate)
+                return m_asusd->hasGpuMux();
+            return mode == Eco || mode == Standard || mode == Optimized;
+        case SuperGfxBackend: {
+            const QList<int> modes = m_superGfx->supportedModes();
+            if (mode == Optimized)
+                return modes.contains(SuperGfxClient::Integrated) && modes.contains(SuperGfxClient::Hybrid);
+            const int gfx = uiToGfx(mode);
+            return gfx >= 0 && modes.contains(gfx);
+        }
+        default:
+            return false;
+    }
 }
+
+// --- Switching -------------------------------------------------------------------
 
 void GpuController::setMode(int mode)
 {
-    if (!m_available) {
-        emit errorOccurred(tr("GPU control is not available (supergfxd not running)"));
+    if (!isAvailable()) {
+        emit errorOccurred(tr("GPU switching is not available (needs asusd with asus-armoury or supergfxd)"));
         return;
     }
     if (!isModeSupported(mode)) {
@@ -125,7 +209,23 @@ void GpuController::setMode(int mode)
     }
 
     setOptimized(false);
-    m_client->setMode(uiToGfx(mode));
+    setHardwareMode(mode);
+}
+
+void GpuController::setHardwareMode(int mode)
+{
+    if (m_backend == ArmouryBackend) {
+        const bool mux = m_asusd->hasGpuMux();
+        qDebug() << "GpuController: queueing" << modeName(mode) << "for next restart";
+        switch (mode) {
+            case Eco:      m_asusd->setGpuAttributes(1, mux ? 1 : -1); break;
+            case Standard: m_asusd->setGpuAttributes(0, mux ? 1 : -1); break;
+            case Ultimate: m_asusd->setGpuAttributes(0, 0); break;
+            default: break;
+        }
+    } else if (m_backend == SuperGfxBackend) {
+        m_superGfx->setMode(uiToGfx(mode));
+    }
 }
 
 void GpuController::setOptimized(bool optimized)
@@ -135,25 +235,38 @@ void GpuController::setOptimized(bool optimized)
     m_optimized = optimized;
     QSettings settings("g-helper-linux", "g-helper-linux");
     settings.setValue("Gpu/optimized", optimized);
-    emit currentModeChanged(currentMode());
+    m_lastEmittedMode = -2;   // force a refresh of the UI
+    emitModeIfChanged();
 }
 
 void GpuController::applyOptimized()
 {
-    if (!m_optimized || !m_available || !m_modeKnown)
-        return;
-    // Leaving the MUX mode needs a reboot - never do that automatically
-    // and don't stack a second switch on top of a pending one.
-    if (m_switchPending)
+    if (!m_optimized || !isAvailable() || !m_modeKnown)
         return;
 
-    const int target = m_onBattery ? SuperGfxClient::Integrated : SuperGfxClient::Hybrid;
-    if (m_gfxMode == target || !m_client->supportedModes().contains(target))
+    const int target = m_onBattery ? Eco : Standard;
+
+    if (m_backend == ArmouryBackend) {
+        // Everything is applied at the next restart, so just make sure the
+        // queued (or current) state matches the power source.
+        const int effective = m_switchPending ? m_pendingMode : hardwareMode();
+        if (effective == target)
+            return;
+        qDebug() << "GpuController: Optimized ->" << modeName(target) << "on next restart"
+                 << (m_onBattery ? "(on battery)" : "(on AC)");
+        setHardwareMode(target);
+        return;
+    }
+
+    // supergfxd switches live; never leave MUX mode automatically and don't
+    // stack a second switch on top of a pending one
+    if (m_switchPending || hardwareMode() == Ultimate)
+        return;
+    if (hardwareMode() == target || !isModeSupported(target))
         return;
 
-    qDebug() << "GpuController: Optimized mode ->" << SuperGfxClient::modeName(target)
-             << (m_onBattery ? "(on battery)" : "(on AC)");
-    m_client->setMode(target);
+    qDebug() << "GpuController: Optimized ->" << modeName(target) << (m_onBattery ? "(on battery)" : "(on AC)");
+    m_superGfx->setMode(uiToGfx(target));
 }
 
 void GpuController::setOnBattery(bool onBattery)
@@ -163,6 +276,22 @@ void GpuController::setOnBattery(bool onBattery)
     m_onBattery = onBattery;
     applyOptimized();
 }
+
+void GpuController::rebootNow()
+{
+    QDBusMessage msg = QDBusMessage::createMethodCall(
+        "org.freedesktop.login1", "/org/freedesktop/login1", "org.freedesktop.login1.Manager", "Reboot");
+    msg << true;  // interactive: allow polkit to ask for authentication
+    auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(msg), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *w) {
+        w->deleteLater();
+        QDBusPendingReply<> reply = *w;
+        if (reply.isError())
+            emit errorOccurred(tr("Restart failed: %1").arg(reply.error().message()));
+    });
+}
+
+// --- Texts ---------------------------------------------------------------------------
 
 QString GpuController::modeName(int mode) const
 {
@@ -177,28 +306,34 @@ QString GpuController::modeName(int mode) const
 
 QString GpuController::modeDescription(int mode) const
 {
+    QString text;
     switch (mode) {
-        case Eco:
-            return tr("iGPU only. Best battery life, dGPU is powered off.");
-        case Standard:
-            return tr("Automatic switching between iGPU and dGPU based on demand.");
-        case Ultimate:
-            return tr("dGPU only via MUX switch. Best gaming performance. Requires a reboot.");
-        case Optimized:
-            return tr("Eco on battery, Standard when plugged in.");
-        default:
-            return tr("Unknown GPU mode.");
+        case Eco: text = tr("iGPU only. Best battery life, dGPU is powered off."); break;
+        case Standard: text = tr("Automatic switching between iGPU and dGPU based on demand."); break;
+        case Ultimate: text = tr("dGPU only via MUX switch. Best gaming performance."); break;
+        case Optimized: text = tr("Eco on battery, Standard when plugged in."); break;
+        default: return tr("Unknown GPU mode.");
     }
+    if (m_backend == ArmouryBackend)
+        text += " " + tr("Takes effect after a restart.");
+    else if (mode == Ultimate)
+        text += " " + tr("Requires a restart.");
+    return text;
 }
 
 QString GpuController::confirmationText(int mode) const
 {
+    // With asusd nothing happens before the next restart and the change can
+    // be undone by clicking the current mode again - no confirmation needed.
+    if (m_backend != SuperGfxBackend)
+        return QString();
+
     const bool toMux = (mode == Ultimate);
     const bool fromMux = (m_gfxMode == SuperGfxClient::AsusMuxDgpu);
     if (toMux && !fromMux)
-        return tr("Switching to Ultimate changes the GPU MUX. A reboot is required to apply it.");
+        return tr("Switching to Ultimate changes the GPU MUX. A restart is required to apply it.");
     if (fromMux && mode != Ultimate)
-        return tr("Leaving Ultimate changes the GPU MUX. A reboot is required to apply it.");
+        return tr("Leaving Ultimate changes the GPU MUX. A restart is required to apply it.");
     return QString();
 }
 
@@ -210,7 +345,7 @@ QString GpuController::actionText(int gfxMode, int action) const
         case SuperGfxClient::ActionLogout:
             return tr("Log out and back in to finish switching to %1.").arg(name);
         case SuperGfxClient::ActionReboot:
-            return tr("Reboot to finish switching to %1.").arg(name);
+            return tr("Restart to finish switching to %1.").arg(name);
         case SuperGfxClient::ActionSwitchToIntegrated:
             return tr("Switch to Eco first, then try %1 again.").arg(name);
         case SuperGfxClient::ActionAsusEgpuDisable:
@@ -222,33 +357,84 @@ QString GpuController::actionText(int gfxMode, int action) const
 
 void GpuController::refresh()
 {
-    if (m_available)
-        m_client->refresh();
+    if (m_backend == ArmouryBackend)
+        m_asusd->fetchArmouryGpu();
+    else if (m_backend == SuperGfxBackend)
+        m_superGfx->refresh();
 }
 
-void GpuController::onModeChanged(int gfxMode)
+// --- State updates --------------------------------------------------------------------
+
+void GpuController::emitModeIfChanged()
+{
+    const int mode = currentMode();
+    if (mode != m_lastEmittedMode) {
+        m_lastEmittedMode = mode;
+        emit currentModeChanged(mode);
+    }
+}
+
+void GpuController::updatePending()
+{
+    bool pending = false;
+    int pendingMode = Unknown;
+
+    if (m_backend == ArmouryBackend) {
+        const int d = m_asusd->dgpuDisableQueued() >= 0 ? m_asusd->dgpuDisableQueued() : m_asusd->dgpuDisable();
+        const int m = m_asusd->gpuMuxQueued() >= 0 ? m_asusd->gpuMuxQueued() : m_asusd->gpuMux();
+        pendingMode = armouryMode(d, m);
+        pending = pendingMode != Unknown && pendingMode != hardwareMode();
+    } else if (m_backend == SuperGfxBackend) {
+        pending = m_superGfx->switchPending();
+        pendingMode = gfxToUi(m_superGfx->pendingMode());
+    }
+
+    const bool changed = (pending != m_switchPending) || (pendingMode != m_pendingMode);
+    m_switchPending = pending;
+    m_pendingMode = pendingMode;
+    if (changed) {
+        emit switchPendingChanged(pending);
+        emit pendingModeChanged(this->pendingMode());
+    }
+}
+
+void GpuController::onArmouryChanged()
+{
+    if (m_backend != ArmouryBackend) {
+        updateBackend();
+        return;
+    }
+
+    const bool firstKnown = !m_modeKnown && m_asusd->dgpuDisable() >= 0;
+    if (firstKnown)
+        m_modeKnown = true;
+
+    updatePending();
+    emitModeIfChanged();
+
+    if (firstKnown)
+        applyOptimized();
+}
+
+void GpuController::onSuperGfxModeChanged(int gfxMode)
 {
     m_gfxMode = gfxMode;
-    emit currentModeChanged(currentMode());
+    if (m_backend != SuperGfxBackend)
+        return;
 
-    if (!m_modeKnown) {
-        m_modeKnown = true;
+    const bool firstKnown = !m_modeKnown;
+    m_modeKnown = true;
+    updatePending();
+    emitModeIfChanged();
+
+    if (firstKnown)
         applyOptimized();
-    }
 }
 
-void GpuController::onPendingModeChanged(int gfxMode)
+void GpuController::onSuperGfxPendingChanged()
 {
-    emit pendingModeChanged(gfxToUi(gfxMode));
-}
-
-void GpuController::onSwitchPendingChanged(bool pending)
-{
-    if (m_switchPending != pending) {
-        m_switchPending = pending;
-        emit switchPendingChanged(pending);
-        emit pendingModeChanged(pendingMode());
-    }
+    if (m_backend == SuperGfxBackend)
+        updatePending();
 }
 
 void GpuController::onGpuPowerChanged(const QString &power)
@@ -256,26 +442,6 @@ void GpuController::onGpuPowerChanged(const QString &power)
     if (m_gpuPower != power) {
         m_gpuPower = power;
         emit gpuPowerChanged(power);
-    }
-}
-
-void GpuController::onClientConnected(bool connected)
-{
-    if (!connected) {
-        m_modeKnown = false;
-        m_gfxMode = -1;
-        emit currentModeChanged(currentMode());
-    }
-
-    if (m_available != connected) {
-        m_available = connected;
-        emit availableChanged(connected);
-    }
-
-    if (connected) {
-        m_gpuPower = m_client->gpuPower();
-        updateSupportedModes();
-        emit gpuPowerChanged(m_gpuPower);
     }
 }
 

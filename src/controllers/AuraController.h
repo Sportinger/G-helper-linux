@@ -13,6 +13,7 @@ class AuraController : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(int brightness READ brightness NOTIFY brightnessChanged)
+    Q_PROPERTY(bool lightOn READ isLightOn NOTIFY brightnessChanged)
     Q_PROPERTY(int currentMode READ currentMode NOTIFY currentModeChanged)
     Q_PROPERTY(QColor color1 READ color1 NOTIFY colorsChanged)
     Q_PROPERTY(QColor color2 READ color2 NOTIFY colorsChanged)
@@ -49,6 +50,7 @@ public:
     ~AuraController() override;
 
     int brightness() const { return m_brightness; }
+    bool isLightOn() const { return m_brightness > BrightnessOff; }
     int currentMode() const { return m_currentMode; }
     QColor color1() const { return m_color1; }
     QColor color2() const { return m_color2; }
@@ -58,6 +60,8 @@ public:
 
     // All setters apply the effect to the keyboard immediately
     Q_INVOKABLE void setBrightness(int level);
+    // Off = brightness 0; on restores the last used brightness
+    Q_INVOKABLE void setLightOn(bool on);
     Q_INVOKABLE void setMode(int mode);
     Q_INVOKABLE void setColor1(const QColor &color);
     Q_INVOKABLE void setColor2(const QColor &color);
@@ -91,6 +95,7 @@ private:
     AsusdClient *m_client;
 
     int m_brightness = BrightnessMedium;
+    int m_lastBrightness = BrightnessMedium;   // last level > 0, for switching back on
     int m_currentMode = Static;
     QColor m_color1 = QColor(255, 0, 0);
     QColor m_color2 = QColor(0, 0, 0);

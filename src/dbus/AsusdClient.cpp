@@ -113,6 +113,11 @@ void AsusdClient::connectToService()
                     this, SLOT(onPropertiesChanged(QString,QVariantMap,QStringList)));
     }
 
+    for (const char *attr : {"dgpu_disable", "gpu_mux_mode"}) {
+        bus.connect(SERVICE, QString(ARMOURY_ROOT) + "/" + attr, INTERFACE_PROPERTIES, "PropertiesChanged",
+                    this, SLOT(onArmouryPropertiesChanged(QString,QVariantMap,QStringList)));
+    }
+
     m_connected = true;
     emit connectedChanged(true);
 
@@ -132,8 +137,15 @@ void AsusdClient::disconnectFromService()
                        this, SLOT(onPropertiesChanged(QString,QVariantMap,QStringList)));
     }
 
+    for (const char *attr : {"dgpu_disable", "gpu_mux_mode"}) {
+        bus.disconnect(SERVICE, QString(ARMOURY_ROOT) + "/" + attr, INTERFACE_PROPERTIES, "PropertiesChanged",
+                       this, SLOT(onArmouryPropertiesChanged(QString,QVariantMap,QStringList)));
+    }
+
     m_auraPath.clear();
     m_slashPath.clear();
+    m_hasDgpuDisable = false;
+    m_hasGpuMux = false;
     m_connected = false;
     emit connectedChanged(false);
 }
@@ -167,6 +179,12 @@ void AsusdClient::findDevices()
             m_auraPath = path;
     }
 
+    const QStringList armoury = childNodes(introspect(SERVICE, ARMOURY_ROOT));
+    m_hasDgpuDisable = armoury.contains(QLatin1String("dgpu_disable"));
+    m_hasGpuMux = armoury.contains(QLatin1String("gpu_mux_mode"));
+
+    qDebug() << "AsusdClient: armoury GPU attributes: dgpu_disable" << m_hasDgpuDisable
+             << "gpu_mux_mode" << m_hasGpuMux;
     qDebug() << "AsusdClient: keyboard aura device:" << (m_auraPath.isEmpty() ? "none" : m_auraPath)
              << "slash:" << (m_slashPath.isEmpty() ? "none" : m_slashPath);
 }
@@ -180,6 +198,7 @@ void AsusdClient::refresh()
     fetchPlatformProfile();
     fetchChargeLimit();
     fetchLedState();
+    fetchArmouryGpu();
 }
 
 // --- Generic property helpers --------------------------------------------
@@ -517,6 +536,63 @@ void AsusdClient::onPropertiesChanged(const QString &interface, const QVariantMa
         if (invalidated.contains("Brightness") || invalidated.contains("LedModeData"))
             fetchLedState();
     }
+}
+
+// --- GPU via asus-armoury ----------------------------------------------------
+
+void AsusdClient::fetchArmouryGpu()
+{
+    auto fetch = [this](const char *attr, const char *property, int *target) {
+        getProperty(QString(ARMOURY_ROOT) + "/" + attr, INTERFACE_ARMOURY, property,
+                    [this, target](const QVariant &value) {
+            const int v = value.toInt();
+            if (*target != v) {
+                *target = v;
+                emit armouryGpuChanged();
+            }
+        });
+    };
+
+    if (m_hasDgpuDisable) {
+        fetch("dgpu_disable", "CurrentValue", &m_dgpuDisable);
+        fetch("dgpu_disable", "QueuedGpuValue", &m_dgpuDisableQueued);
+    }
+    if (m_hasGpuMux) {
+        fetch("gpu_mux_mode", "CurrentValue", &m_gpuMux);
+        fetch("gpu_mux_mode", "QueuedGpuValue", &m_gpuMuxQueued);
+    }
+}
+
+void AsusdClient::setGpuAttributes(int dgpuDisable, int gpuMux)
+{
+    if (!m_hasDgpuDisable) {
+        emit errorOccurred(tr("GPU switching is not supported by asusd on this device"));
+        return;
+    }
+
+    if (dgpuDisable >= 0) {
+        setProperty(QString(ARMOURY_ROOT) + "/dgpu_disable", INTERFACE_ARMOURY, "CurrentValue",
+                    QVariant::fromValue(static_cast<int>(dgpuDisable)),
+                    [this]() { fetchArmouryGpu(); },
+                    tr("Failed to change GPU mode"),
+                    [this]() { fetchArmouryGpu(); });
+    }
+    if (gpuMux >= 0 && m_hasGpuMux) {
+        setProperty(QString(ARMOURY_ROOT) + "/gpu_mux_mode", INTERFACE_ARMOURY, "CurrentValue",
+                    QVariant::fromValue(static_cast<int>(gpuMux)),
+                    [this]() { fetchArmouryGpu(); },
+                    tr("Failed to change GPU MUX mode"),
+                    [this]() { fetchArmouryGpu(); });
+    }
+}
+
+void AsusdClient::onArmouryPropertiesChanged(const QString &interface, const QVariantMap &changed, const QStringList &invalidated)
+{
+    Q_UNUSED(interface)
+    Q_UNUSED(changed)
+    Q_UNUSED(invalidated)
+    // The signal doesn't say which attribute changed; re-read both
+    fetchArmouryGpu();
 }
 
 // --- Fan curves ------------------------------------------------------------
