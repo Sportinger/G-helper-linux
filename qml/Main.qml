@@ -514,7 +514,29 @@ ApplicationWindow {
                             var line = "dGPU: " + state
                             if (SystemMonitor.dgpuUsage > 0)
                                 line += " · " + Math.round(SystemMonitor.dgpuUsage) + "%"
+                            // Apps keeping the dGPU awake (drains the battery)
+                            if (SystemMonitor.dgpuUserNames !== "")
+                                line += " · " + qsTr("used by %1").arg(SystemMonitor.dgpuUserNames)
                             return line
+                        }
+
+                        MouseArea {
+                            id: dgpuUsersMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                        }
+                        ToolTip.visible: dgpuUsersMouse.containsMouse && SystemMonitor.dgpuUsers.length > 0
+                        ToolTip.delay: 300
+                        ToolTip.text: {
+                            var lines = [qsTr("Processes using the dGPU:")]
+                            var users = SystemMonitor.dgpuUsers
+                            for (var i = 0; i < users.length; i++) {
+                                lines.push("• " + users[i].name + " (PID " + users[i].pid + ")"
+                                           + (users[i].desktop ? " – " + qsTr("desktop, harmless") : ""))
+                            }
+                            lines.push("")
+                            lines.push(qsTr("Close these apps to let the dGPU sleep in Standard mode."))
+                            return lines.join("\n")
                         }
                     }
 

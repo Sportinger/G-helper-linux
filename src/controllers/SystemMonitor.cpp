@@ -6,6 +6,12 @@
 #include <QProcess>
 #include "PowerSupply.h"
 #include <QDateTime>
+#include <QCoreApplication>
+#include <QFileInfo>
+#include <QRegularExpression>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 SystemMonitor::SystemMonitor(QObject *parent)
     : QObject(parent)
@@ -117,7 +123,11 @@ void SystemMonitor::findHwmonPaths()
         if (PowerSupply::readAttribute(path, "vendor") == "0x10de"
             && PowerSupply::readAttribute(path, "class").startsWith("0x03")) {
             m_dgpuPciPath = path;
-            qDebug() << "Found NVIDIA dGPU at:" << m_dgpuPciPath;
+            const QStringList drmNodes = QDir(path + "/drm").entryList(
+                QStringList() << "card*" << "renderD*", QDir::Dirs | QDir::System);
+            for (const QString &node : drmNodes)
+                m_dgpuDevNodes << "/dev/dri/" + node;
+            qDebug() << "Found NVIDIA dGPU at:" << m_dgpuPciPath << m_dgpuDevNodes;
             break;
         }
     }
@@ -283,6 +293,118 @@ void SystemMonitor::resetDgpuStats()
     }
 }
 
+namespace {
+
+// Display name for a process: the script/module for interpreters
+// ("python -m vidscout" -> "vidscout"), otherwise the command name.
+QString processName(const QString &pid)
+{
+    QString comm = PowerSupply::readAttribute("/proc/" + pid, "comm");
+
+    static const QRegularExpression interpreter("^(python[0-9.]*|node|java|ruby|perl|bash|sh)$");
+    if (interpreter.match(comm).hasMatch()) {
+        QFile cmdlineFile("/proc/" + pid + "/cmdline");
+        if (cmdlineFile.open(QIODevice::ReadOnly)) {
+            const QList<QByteArray> args = cmdlineFile.readAll().split('\0');
+            for (int i = 1; i < args.size(); ++i) {
+                const QString arg = QString::fromLocal8Bit(args[i]);
+                if (arg == "-m" && i + 1 < args.size())
+                    return QString::fromLocal8Bit(args[i + 1]).section('.', 0, 0);
+                if (!arg.isEmpty() && !arg.startsWith('-'))
+                    return QFileInfo(arg).completeBaseName();
+            }
+        }
+    }
+
+    if (!comm.isEmpty())
+        comm[0] = comm[0].toUpper();
+    return comm;
+}
+
+}
+
+void SystemMonitor::scanDgpuUsers()
+{
+    const uid_t uid = getuid();
+    const qint64 ownPid = QCoreApplication::applicationPid();
+    QVariantList users;
+    QStringList appNames;
+
+    DIR *proc = opendir("/proc");
+    if (!proc)
+        return;
+
+    while (dirent *entry = readdir(proc)) {
+        if (entry->d_name[0] < '0' || entry->d_name[0] > '9')
+            continue;
+
+        const QByteArray pidDir = QByteArray("/proc/") + entry->d_name;
+        struct stat st;
+        // Other users' file descriptors aren't readable anyway
+        if (stat(pidDir.constData(), &st) != 0 || st.st_uid != uid)
+            continue;
+        if (QByteArray(entry->d_name).toLongLong() == ownPid)
+            continue;
+
+        DIR *fdDir = opendir((pidDir + "/fd").constData());
+        if (!fdDir)
+            continue;
+
+        bool usesDgpu = false;
+        char target[256];
+        while (dirent *fd = readdir(fdDir)) {
+            if (fd->d_name[0] == '.')
+                continue;
+            const QByteArray link = pidDir + "/fd/" + fd->d_name;
+            const ssize_t len = readlink(link.constData(), target, sizeof(target) - 1);
+            if (len <= 0)
+                continue;
+            target[len] = '\0';
+            const QLatin1String path(target, len);
+            // /dev/nvidia0..N and nvidia-uvm (CUDA) or the dGPU's DRM nodes
+            if ((path.startsWith(QLatin1String("/dev/nvidia")) && path != QLatin1String("/dev/nvidiactl")
+                 && path != QLatin1String("/dev/nvidia-modeset"))
+                || m_dgpuDevNodes.contains(QString(path))) {
+                usesDgpu = true;
+                break;
+            }
+        }
+        closedir(fdDir);
+
+        if (!usesDgpu)
+            continue;
+
+        const QString pid = QString::fromLatin1(entry->d_name);
+        const QString name = processName(pid);
+        // The compositor always keeps the device open; that alone doesn't
+        // prevent the dGPU from sleeping
+        static const QStringList desktopProcesses = {
+            "Gnome-shell", "Xwayland", "Xorg", "Kwin_wayland", "Kwin_x11", "Mutter", "Gnome-shell-cal"
+        };
+        const bool desktop = desktopProcesses.contains(name);
+        users << QVariantMap{{"pid", pid.toInt()}, {"name", name}, {"desktop", desktop}};
+        if (!desktop && !appNames.contains(name))
+            appNames << name;
+    }
+    closedir(proc);
+
+    setDgpuUsers(users);
+    if (m_dgpuUserNames != appNames.join(", ")) {
+        m_dgpuUserNames = appNames.join(", ");
+        emit dgpuUsersChanged();
+    }
+}
+
+void SystemMonitor::setDgpuUsers(const QVariantList &users)
+{
+    if (m_dgpuUsers == users)
+        return;
+    m_dgpuUsers = users;
+    if (users.isEmpty())
+        m_dgpuUserNames.clear();
+    emit dgpuUsersChanged();
+}
+
 void SystemMonitor::readDgpuInfo()
 {
     if (m_dgpuPciPath.isEmpty())
@@ -298,6 +420,15 @@ void SystemMonitor::readDgpuInfo()
     // Only ask nvidia-smi while the dGPU is awake *and* in use. Polling an
     // idle dGPU (usage count 0) would keep it from suspending.
     const double usageCount = PowerSupply::readNumber(m_dgpuPciPath + "/power", "runtime_usage", 1);
+    // Who keeps the dGPU awake? Only interesting while it is awake.
+    if (state == "active") {
+        if (m_dgpuScanTick++ % 3 == 0)
+            scanDgpuUsers();
+    } else {
+        m_dgpuScanTick = 0;
+        setDgpuUsers({});
+    }
+
     const bool queryable = (state == "active") && usageCount > 0;
     if (!queryable) {
         resetDgpuStats();

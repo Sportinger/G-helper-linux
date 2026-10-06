@@ -20,6 +20,10 @@ class SystemMonitor : public QObject
     Q_PROPERTY(double dgpuUsage READ dgpuUsage NOTIFY dgpuUsageChanged)
     Q_PROPERTY(int dgpuTemp READ dgpuTemp NOTIFY dgpuTempChanged)
     Q_PROPERTY(QString dgpuState READ dgpuState NOTIFY dgpuStateChanged)
+    // Processes that have the NVIDIA dGPU open: [{pid, name, desktop}]
+    Q_PROPERTY(QVariantList dgpuUsers READ dgpuUsers NOTIFY dgpuUsersChanged)
+    // Comma separated names of the apps keeping the dGPU busy (desktop shell excluded)
+    Q_PROPERTY(QString dgpuUserNames READ dgpuUserNames NOTIFY dgpuUsersChanged)
     Q_PROPERTY(int memoryUsed READ memoryUsed NOTIFY memoryChanged)
     Q_PROPERTY(int memoryTotal READ memoryTotal NOTIFY memoryChanged)
     Q_PROPERTY(double apuPower READ apuPower NOTIFY apuPowerChanged)
@@ -46,6 +50,8 @@ public:
     int dgpuTemp() const { return m_dgpuTemp; }
     // Runtime PM state of the NVIDIA dGPU: "active", "suspended", ... or "" if none
     QString dgpuState() const { return m_dgpuState; }
+    QVariantList dgpuUsers() const { return m_dgpuUsers; }
+    QString dgpuUserNames() const { return m_dgpuUserNames; }
     int memoryUsed() const { return m_memoryUsed; }
     int memoryTotal() const { return m_memoryTotal; }
     double apuPower() const { return m_apuPower; }
@@ -73,6 +79,7 @@ signals:
     void dgpuUsageChanged(double usage);
     void dgpuTempChanged(int temp);
     void dgpuStateChanged(const QString &state);
+    void dgpuUsersChanged();
     void memoryChanged();
     void apuPowerChanged(double power);
     void systemPowerChanged(double power);
@@ -93,6 +100,8 @@ private:
     void readGpuUsage();
     void readDgpuInfo();
     void resetDgpuStats();
+    void scanDgpuUsers();
+    void setDgpuUsers(const QVariantList &users);
     void readMemoryInfo();
     void readApuPower();
     void readDisplayBrightness();
@@ -102,7 +111,11 @@ private:
     QTimer *m_updateTimer;
     QProcess *m_nvidiaSmi = nullptr;
     QString m_dgpuPciPath;
+    QStringList m_dgpuDevNodes;      // /dev/dri/cardN, /dev/dri/renderDN of the dGPU
     QString m_dgpuState;
+    QVariantList m_dgpuUsers;
+    QString m_dgpuUserNames;
+    int m_dgpuScanTick = 0;
     bool m_nvidiaSmiMissing = false;
     qint64 m_nvidiaSmiBackoffUntil = 0;
     int m_dgpuTick = 0;
