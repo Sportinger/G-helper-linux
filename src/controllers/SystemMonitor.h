@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QTimer>
+#include <QProcess>
 #include <QMap>
 
 class SystemMonitor : public QObject
@@ -18,6 +19,7 @@ class SystemMonitor : public QObject
     Q_PROPERTY(double gpuUsage READ gpuUsage NOTIFY gpuUsageChanged)
     Q_PROPERTY(double dgpuUsage READ dgpuUsage NOTIFY dgpuUsageChanged)
     Q_PROPERTY(int dgpuTemp READ dgpuTemp NOTIFY dgpuTempChanged)
+    Q_PROPERTY(QString dgpuState READ dgpuState NOTIFY dgpuStateChanged)
     Q_PROPERTY(int memoryUsed READ memoryUsed NOTIFY memoryChanged)
     Q_PROPERTY(int memoryTotal READ memoryTotal NOTIFY memoryChanged)
     Q_PROPERTY(double apuPower READ apuPower NOTIFY apuPowerChanged)
@@ -42,6 +44,8 @@ public:
     double gpuUsage() const { return m_gpuUsage; }
     double dgpuUsage() const { return m_dgpuUsage; }
     int dgpuTemp() const { return m_dgpuTemp; }
+    // Runtime PM state of the NVIDIA dGPU: "active", "suspended", ... or "" if none
+    QString dgpuState() const { return m_dgpuState; }
     int memoryUsed() const { return m_memoryUsed; }
     int memoryTotal() const { return m_memoryTotal; }
     double apuPower() const { return m_apuPower; }
@@ -56,6 +60,7 @@ public:
     Q_INVOKABLE void stop();
     Q_INVOKABLE void setUpdateInterval(int msec);
 
+
 signals:
     void cpuTempChanged(int temp);
     void gpuTempChanged(int temp);
@@ -67,6 +72,7 @@ signals:
     void gpuUsageChanged(double usage);
     void dgpuUsageChanged(double usage);
     void dgpuTempChanged(int temp);
+    void dgpuStateChanged(const QString &state);
     void memoryChanged();
     void apuPowerChanged(double power);
     void systemPowerChanged(double power);
@@ -86,6 +92,7 @@ private:
     void readCpuUsage();
     void readGpuUsage();
     void readDgpuInfo();
+    void resetDgpuStats();
     void readMemoryInfo();
     void readApuPower();
     void readDisplayBrightness();
@@ -93,6 +100,12 @@ private:
     void calculateSystemPower();
 
     QTimer *m_updateTimer;
+    QProcess *m_nvidiaSmi = nullptr;
+    QString m_dgpuPciPath;
+    QString m_dgpuState;
+    bool m_nvidiaSmiMissing = false;
+    qint64 m_nvidiaSmiBackoffUntil = 0;
+    int m_dgpuTick = 0;
     bool m_available = false;
 
     // Hwmon paths
@@ -101,6 +114,7 @@ private:
     QString m_cpuFanPath;
     QString m_gpuFanPath;
     QString m_apuPowerPath;
+    QString m_gpuBusyPath;
     QString m_backlightPath;
     int m_maxBrightness = 0;
 
@@ -132,8 +146,6 @@ private:
     static constexpr double MAX_DISPLAY_POWER = 15.0; // Max display power in watts at 100% brightness
     static constexpr double MIN_DISPLAY_POWER = 2.0;  // Min display power in watts at 0% brightness
     static constexpr double MISC_POWER_ESTIMATE = 5.0; // Estimated power for SSD, WiFi, RAM, etc.
-    static constexpr const char* BATTERY_PATH = "/sys/class/power_supply/BAT1";
-    static constexpr const char* AC_PATH = "/sys/class/power_supply/ACAD";
 };
 
 #endif // SYSTEMMONITOR_H

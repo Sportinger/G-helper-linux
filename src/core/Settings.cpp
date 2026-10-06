@@ -3,6 +3,8 @@
 #include <QDir>
 #include <QFile>
 #include <QTextStream>
+#include <QFileInfo>
+#include <QCoreApplication>
 
 Settings::Settings(QObject *parent)
     : QObject(parent)
@@ -127,6 +129,9 @@ void Settings::load()
 
     m_settings.beginGroup("General");
     m_autoStart = m_settings.value("autoStart", false).toBool();
+    // The autostart entry is the real source of truth (it may have been
+    // removed by the user or the desktop environment)
+    m_autoStart = m_autoStart && QFile::exists(autostartFilePath());
     m_showTrayIcon = m_settings.value("showTrayIcon", true).toBool();
     m_minimizeToTray = m_settings.value("minimizeToTray", true).toBool();
     m_settings.endGroup();
@@ -160,10 +165,22 @@ void Settings::resetToDefaults()
     save();
 }
 
+QString Settings::autostartFilePath()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) + "/autostart/g-helper-linux.desktop";
+}
+
+void Settings::refreshAutostartEntry()
+{
+    // Keep the Exec path current if the binary was moved or rebuilt elsewhere
+    if (m_autoStart)
+        setupAutostart(true);
+}
+
 void Settings::setupAutostart(bool enable)
 {
-    QString autostartDir = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) + "/autostart";
-    QString desktopFile = autostartDir + "/g-helper-linux.desktop";
+    const QString desktopFile = autostartFilePath();
+    const QString autostartDir = QFileInfo(desktopFile).absolutePath();
 
     QDir dir;
     if (!dir.exists(autostartDir)) {
@@ -177,7 +194,10 @@ void Settings::setupAutostart(bool enable)
             out << "[Desktop Entry]\n";
             out << "Type=Application\n";
             out << "Name=G-Helper Linux\n";
-            out << "Exec=g-helper-linux --minimized\n";
+            // Use the absolute path: the binary is usually not installed in $PATH
+            QString exec = QCoreApplication::applicationFilePath();
+            exec.replace("\\", "\\\\").replace("\"", "\\\"");
+            out << "Exec=\"" << exec << "\" --minimized\n";
             out << "Icon=g-helper-linux\n";
             out << "Comment=ASUS ROG Laptop Control\n";
             out << "Categories=System;Utility;\n";

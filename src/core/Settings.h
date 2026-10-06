@@ -51,6 +51,9 @@ public:
     Q_INVOKABLE void load();
     Q_INVOKABLE void resetToDefaults();
 
+    // Rewrites the autostart entry so it points to the current binary
+    void refreshAutostartEntry();
+
 signals:
     void startMinimizedChanged();
     void autoStartChanged();
@@ -63,6 +66,7 @@ signals:
 
 private:
     void setupAutostart(bool enable);
+    static QString autostartFilePath();
 
     QSettings m_settings;
 

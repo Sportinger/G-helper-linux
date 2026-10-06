@@ -1,15 +1,17 @@
 #include <QApplication>
+#include <QCommandLineParser>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QIcon>
 #include <QScreen>
 #include <QWindow>
+#include <QSystemTrayIcon>
 
 using namespace Qt::StringLiterals;
 
-#include "core/Application.h"
 #include "core/Settings.h"
+#include "core/Notifications.h"
 #include "dbus/DBusWatcher.h"
 #include "dbus/AsusdClient.h"
 #include "dbus/SuperGfxClient.h"
@@ -32,13 +34,24 @@ int main(int argc, char *argv[])
     app.setOrganizationDomain("github.com/g-helper-linux");
     app.setWindowIcon(QIcon(":/icons/g-helper.svg"));
 
+    QCommandLineParser parser;
+    parser.setApplicationDescription("ASUS ROG laptop control");
+    parser.addHelpOption();
+    parser.addVersionOption();
+    QCommandLineOption minimizedOption("minimized", "Start hidden in the system tray.");
+    parser.addOption(minimizedOption);
+    parser.process(app);
+
     QQuickStyle::setStyle("Basic");
 
     // Initialize core components
     Settings settings;
+    settings.refreshAutostartEntry();
+    Notifications notifications;
     DBusWatcher dbusWatcher;
 
-    // Initialize D-Bus clients
+    // Initialize D-Bus clients (they reconnect on their own when the
+    // daemons are restarted)
     AsusdClient asusdClient;
     SuperGfxClient superGfxClient;
 
@@ -49,10 +62,32 @@ int main(int argc, char *argv[])
     FanController fanController(&asusdClient);
     AuraController auraController(&asusdClient);
     SystemMonitor systemMonitor;
-    SlashController slashController;
+    SlashController slashController(&asusdClient);
+
+    // Every error is shown exactly once in the UI
+    QObject::connect(&asusdClient, &AsusdClient::errorOccurred, &notifications, &Notifications::reportError);
+    QObject::connect(&superGfxClient, &SuperGfxClient::errorOccurred, &notifications, &Notifications::reportError);
+    QObject::connect(&performanceController, &PerformanceController::errorOccurred, &notifications, &Notifications::reportError);
+    QObject::connect(&gpuController, &GpuController::errorOccurred, &notifications, &Notifications::reportError);
+    QObject::connect(&batteryController, &BatteryController::errorOccurred, &notifications, &Notifications::reportError);
+    QObject::connect(&fanController, &FanController::errorOccurred, &notifications, &Notifications::reportError);
+    QObject::connect(&auraController, &AuraController::errorOccurred, &notifications, &Notifications::reportError);
+    QObject::connect(&slashController, &SlashController::errorOccurred, &notifications, &Notifications::reportError);
+
+    // GPU "Optimized" mode follows the power source
+    QObject::connect(&systemMonitor, &SystemMonitor::onBatteryChanged,
+                     &gpuController, &GpuController::setOnBattery);
 
     // Initialize tray manager
     TrayManager trayManager(&performanceController, &gpuController);
+    trayManager.setVisible(settings.showTrayIcon());
+    QObject::connect(&settings, &Settings::showTrayIconChanged, &trayManager, [&]() {
+        trayManager.setVisible(settings.showTrayIcon());
+    });
+
+    // Keep running in the tray when the window is closed/hidden
+    const bool trayAvailable = QSystemTrayIcon::isSystemTrayAvailable();
+    app.setQuitOnLastWindowClosed(!trayAvailable);
 
     // Setup QML engine
     QQmlApplicationEngine engine;
@@ -60,6 +95,7 @@ int main(int argc, char *argv[])
 
     // Register singletons
     qmlRegisterSingletonInstance("GHelperLinux", 1, 0, "Settings", &settings);
+    qmlRegisterSingletonInstance("GHelperLinux", 1, 0, "Notifications", &notifications);
     qmlRegisterSingletonInstance("GHelperLinux", 1, 0, "DBusWatcher", &dbusWatcher);
     qmlRegisterSingletonInstance("GHelperLinux", 1, 0, "PerformanceController", &performanceController);
     qmlRegisterSingletonInstance("GHelperLinux", 1, 0, "GpuController", &gpuController);
@@ -82,52 +118,34 @@ int main(int argc, char *argv[])
     if (engine.rootObjects().isEmpty())
         return -1;
 
-    // Position window at bottom right
     QObject *rootObject = engine.rootObjects().first();
     QWindow *window = qobject_cast<QWindow*>(rootObject);
 
+    // Position window at bottom right of the screen it is on
     auto positionWindow = [window]() {
         if (!window) return;
-        QScreen *screen = QGuiApplication::primaryScreen();
+        QScreen *screen = window->screen() ? window->screen() : QGuiApplication::primaryScreen();
         if (screen) {
-            QRect availableGeometry = screen->availableGeometry();
-            int x = availableGeometry.right() - window->width() - 12;
-            int y = availableGeometry.bottom() - window->height() - 60;
+            const QRect availableGeometry = screen->availableGeometry();
+            const int x = availableGeometry.right() - window->width() - 12;
+            const int y = availableGeometry.bottom() - window->height() - 12;
             window->setPosition(x, y);
         }
     };
 
-    // Position on startup
     positionWindow();
 
     // Reposition when shown from tray
     QObject::connect(&trayManager, &TrayManager::showWindowRequested, positionWindow);
 
+    // Start hidden only if there is a tray icon to bring the window back
+    const bool startHidden = (parser.isSet(minimizedOption) || settings.startMinimized())
+                             && trayAvailable && settings.showTrayIcon();
+    if (window && !startHidden)
+        window->show();
+
     // Start monitoring
     systemMonitor.start();
-
-    // Connect D-Bus watcher signals
-    QObject::connect(&dbusWatcher, &DBusWatcher::asusdConnectedChanged, [&](bool connected) {
-        if (connected) {
-            performanceController.refresh();
-            batteryController.refresh();
-            fanController.refresh();
-            auraController.refresh();
-        }
-    });
-
-    QObject::connect(&dbusWatcher, &DBusWatcher::supergfxConnectedChanged, [&](bool connected) {
-        if (connected) {
-            superGfxClient.reconnect();
-            gpuController.refresh();
-        }
-    });
-
-    // Initial reconnect if services are already available but clients missed it
-    if (dbusWatcher.supergfxConnected() && !superGfxClient.isConnected()) {
-        superGfxClient.reconnect();
-        gpuController.refresh();
-    }
 
     return app.exec();
 }

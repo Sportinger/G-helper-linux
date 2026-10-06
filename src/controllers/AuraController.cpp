@@ -1,8 +1,6 @@
 #include "AuraController.h"
 #include "AsusdClient.h"
-#include <QProcess>
 #include <QDebug>
-#include <QRegularExpression>
 
 AuraController::AuraController(AsusdClient *client, QObject *parent)
     : QObject(parent)
@@ -12,89 +10,55 @@ AuraController::AuraController(AsusdClient *client, QObject *parent)
             this, &AuraController::onBrightnessChanged);
     connect(m_client, &AsusdClient::connectedChanged,
             this, &AuraController::onClientConnected);
-    connect(m_client, &AsusdClient::errorOccurred,
-            this, &AuraController::errorOccurred);
+    connect(m_client, &AsusdClient::auraModeDataChanged,
+            this, &AuraController::onModeDataChanged);
+    connect(m_client, &AsusdClient::supportedAuraModesChanged,
+            this, &AuraController::updateAvailableModes);
 
-    initAvailableModes();
-
-    m_available = m_client->isConnected();
+    updateAvailableModes();
+    updateAvailability();
     if (m_available) {
         m_brightness = static_cast<int>(m_client->ledBrightness());
-        fetchCurrentState();
-    }
-}
-
-void AuraController::fetchCurrentState()
-{
-    // Read current LED state from asusctl
-    QProcess process;
-    process.start("asusctl", QStringList{"led-mode", "-c"});
-    process.waitForFinished(3000);
-
-    QString output = QString::fromUtf8(process.readAllStandardOutput());
-    qDebug() << "AuraController: Current LED state:" << output;
-
-    // Parse output to get current mode and colors
-    // Example: "Current mode: Static, Colour 1: #00a0e0"
-    for (const QString &line : output.split('\n')) {
-        QString trimmed = line.trimmed().toLower();
-        if (trimmed.contains("mode")) {
-            if (line.contains("Static", Qt::CaseInsensitive)) m_currentMode = Static;
-            else if (line.contains("Breathe", Qt::CaseInsensitive)) m_currentMode = Breathe;
-            else if (line.contains("Strobe", Qt::CaseInsensitive)) m_currentMode = Strobe;
-            else if (line.contains("Rainbow", Qt::CaseInsensitive)) m_currentMode = Rainbow;
-            else if (line.contains("Pulse", Qt::CaseInsensitive)) m_currentMode = Pulse;
-            else if (line.contains("Comet", Qt::CaseInsensitive)) m_currentMode = Comet;
-            else if (line.contains("Off", Qt::CaseInsensitive)) m_currentMode = Off;
-            emit currentModeChanged(m_currentMode);
-        }
-        if (trimmed.contains("colour") || trimmed.contains("color")) {
-            // Try to extract hex color
-            QRegularExpression re("#([0-9A-Fa-f]{6})");
-            QRegularExpressionMatch match = re.match(line);
-            if (match.hasMatch()) {
-                QString hex = "#" + match.captured(1);
-                if (trimmed.contains("1") || !m_color1.isValid()) {
-                    m_color1 = QColor(hex);
-                } else {
-                    m_color2 = QColor(hex);
-                }
-                emit colorsChanged();
-            }
-        }
+        onModeDataChanged();
     }
 }
 
 AuraController::~AuraController() = default;
 
-void AuraController::initAvailableModes()
+void AuraController::updateAvailability()
 {
+    const bool available = m_client->isConnected() && m_client->hasAura();
+    if (m_available != available) {
+        m_available = available;
+        emit availableChanged(available);
+    }
+}
+
+void AuraController::updateAvailableModes()
+{
+    QList<quint32> modes = m_client->supportedAuraModes();
+    if (modes.isEmpty()) {
+        // Every Aura keyboard supports at least these
+        modes = {Static, Breathe, RainbowCycle, RainbowWave, Pulse};
+    }
+
     m_availableModes.clear();
-
-    auto addMode = [this](int mode, const QString &name, const QString &icon) {
+    for (quint32 mode : modes) {
         QVariantMap modeInfo;
-        modeInfo["mode"] = mode;
-        modeInfo["name"] = name;
-        modeInfo["icon"] = icon;
-        modeInfo["usesColor"] = modeUsesColor(mode);
-        modeInfo["usesTwoColors"] = modeUsesTwoColors(mode);
-        modeInfo["usesSpeed"] = modeUsesSpeed(mode);
+        modeInfo["mode"] = static_cast<int>(mode);
+        modeInfo["name"] = modeName(static_cast<int>(mode));
+        modeInfo["usesColor"] = modeUsesColor(static_cast<int>(mode));
+        modeInfo["usesTwoColors"] = modeUsesTwoColors(static_cast<int>(mode));
+        modeInfo["usesSpeed"] = modeUsesSpeed(static_cast<int>(mode));
         m_availableModes.append(modeInfo);
-    };
-
-    addMode(Off, tr("Off"), "qrc:/icons/led-off.svg");
-    addMode(Static, tr("Static"), "qrc:/icons/led-static.svg");
-    addMode(Breathe, tr("Breathe"), "qrc:/icons/led-breathe.svg");
-    addMode(Strobe, tr("Strobe"), "qrc:/icons/led-strobe.svg");
-    addMode(Rainbow, tr("Rainbow"), "qrc:/icons/led-rainbow.svg");
-    addMode(Pulse, tr("Pulse"), "qrc:/icons/led-pulse.svg");
-    addMode(Comet, tr("Comet"), "qrc:/icons/led-comet.svg");
+    }
+    emit availableModesChanged();
 }
 
 void AuraController::setBrightness(int level)
 {
     if (!m_available) {
-        emit errorOccurred(tr("Aura control is not available"));
+        emit errorOccurred(tr("Keyboard backlight control is not available"));
         return;
     }
 
@@ -102,6 +66,9 @@ void AuraController::setBrightness(int level)
         emit errorOccurred(tr("Invalid brightness level"));
         return;
     }
+
+    if (level == m_brightness)
+        return;
 
     m_client->setLedBrightness(static_cast<quint32>(level));
 }
@@ -112,6 +79,7 @@ void AuraController::setMode(int mode)
         m_currentMode = mode;
         emit currentModeChanged(mode);
     }
+    applyEffect();
 }
 
 void AuraController::setColor1(const QColor &color)
@@ -119,9 +87,8 @@ void AuraController::setColor1(const QColor &color)
     if (m_color1 != color) {
         m_color1 = color;
         emit colorsChanged();
-        // Automatically apply the effect when color changes
-        applyEffect();
     }
+    applyEffect();
 }
 
 void AuraController::setColor2(const QColor &color)
@@ -130,44 +97,42 @@ void AuraController::setColor2(const QColor &color)
         m_color2 = color;
         emit colorsChanged();
     }
+    applyEffect();
 }
 
 void AuraController::setSpeed(int speed)
 {
-    if (speed < 0 || speed > 2) {
-        speed = 1; // Default to medium
-    }
+    speed = qBound(0, speed, 2);
     if (m_speed != speed) {
         m_speed = speed;
         emit speedChanged(speed);
     }
+    applyEffect();
 }
 
 void AuraController::applyEffect()
 {
     if (!m_available) {
-        emit errorOccurred(tr("Aura control is not available"));
+        emit errorOccurred(tr("Keyboard backlight control is not available"));
         return;
     }
 
-    m_client->setLedMode(static_cast<quint32>(m_currentMode), m_color1, m_color2, static_cast<quint8>(m_speed));
+    m_client->setLedMode(static_cast<quint32>(m_currentMode), m_color1, m_color2, m_speed);
 }
 
 void AuraController::refresh()
 {
-    if (m_available) {
+    if (m_available)
         m_client->refresh();
-    }
 }
 
 QString AuraController::modeName(int mode) const
 {
     switch (mode) {
-        case Off: return tr("Off");
         case Static: return tr("Static");
         case Breathe: return tr("Breathe");
-        case Strobe: return tr("Strobe");
-        case Rainbow: return tr("Rainbow");
+        case RainbowCycle: return tr("Rainbow Cycle");
+        case RainbowWave: return tr("Rainbow Wave");
         case Star: return tr("Star");
         case Rain: return tr("Rain");
         case Highlight: return tr("Highlight");
@@ -176,46 +141,60 @@ QString AuraController::modeName(int mode) const
         case Pulse: return tr("Pulse");
         case Comet: return tr("Comet");
         case Flash: return tr("Flash");
-        default: return tr("Unknown");
+        default: return tr("Mode %1").arg(mode);
     }
 }
 
 bool AuraController::modeUsesColor(int mode) const
 {
-    // Rainbow doesn't use custom colors
-    return mode != Rainbow && mode != Off;
+    // The rainbow effects cycle through all colours themselves
+    return mode != RainbowCycle && mode != RainbowWave && mode != Rain;
 }
 
 bool AuraController::modeUsesTwoColors(int mode) const
 {
-    // These modes use two colors
-    return mode == Breathe || mode == Strobe || mode == Comet || mode == Pulse;
+    return mode == Breathe || mode == Star;
 }
 
 bool AuraController::modeUsesSpeed(int mode) const
 {
-    // Static doesn't have speed
-    return mode != Static && mode != Off;
+    return mode != Static;
 }
 
 void AuraController::onBrightnessChanged(quint32 brightness)
 {
-    int newBrightness = static_cast<int>(brightness);
+    const int newBrightness = static_cast<int>(brightness);
     if (m_brightness != newBrightness) {
         m_brightness = newBrightness;
         emit brightnessChanged(newBrightness);
     }
 }
 
+void AuraController::onModeDataChanged()
+{
+    const int mode = static_cast<int>(m_client->auraMode());
+    if (m_currentMode != mode) {
+        m_currentMode = mode;
+        emit currentModeChanged(mode);
+    }
+    if (m_color1 != m_client->auraColor1() || m_color2 != m_client->auraColor2()) {
+        m_color1 = m_client->auraColor1();
+        m_color2 = m_client->auraColor2();
+        emit colorsChanged();
+    }
+    if (m_speed != m_client->auraSpeed()) {
+        m_speed = m_client->auraSpeed();
+        emit speedChanged(m_speed);
+    }
+}
+
 void AuraController::onClientConnected(bool connected)
 {
-    if (m_available != connected) {
-        m_available = connected;
-        emit availableChanged(connected);
+    updateAvailability();
+    updateAvailableModes();
 
-        if (connected) {
-            m_brightness = static_cast<int>(m_client->ledBrightness());
-            emit brightnessChanged(m_brightness);
-        }
+    if (connected && m_available) {
+        m_brightness = static_cast<int>(m_client->ledBrightness());
+        emit brightnessChanged(m_brightness);
     }
 }

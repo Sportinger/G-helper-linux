@@ -23,8 +23,8 @@ qt_standard_project_setup()
 # Source files
 set(SOURCES
     src/main.cpp
-    src/core/Application.cpp
     src/core/Settings.cpp
+    src/core/PowerSupply.cpp
     src/dbus/DBusWatcher.cpp
     src/dbus/AsusdClient.cpp
     src/dbus/SuperGfxClient.cpp
@@ -35,14 +35,13 @@ set(SOURCES
     src/controllers/AuraController.cpp
     src/controllers/SystemMonitor.cpp
     src/controllers/SlashController.cpp
-    src/models/FanCurveModel.cpp
-    src/models/AuraModeModel.cpp
     src/tray/TrayManager.cpp
 )
 
 set(HEADERS
-    src/core/Application.h
     src/core/Settings.h
+    src/core/PowerSupply.h
+    src/core/Notifications.h
     src/dbus/DBusTypes.h
     src/dbus/DBusWatcher.h
     src/dbus/AsusdClient.h
@@ -54,8 +53,6 @@ set(HEADERS
     src/controllers/AuraController.h
     src/controllers/SystemMonitor.h
     src/controllers/SlashController.h
-    src/models/FanCurveModel.h
-    src/models/AuraModeModel.h
     src/tray/TrayManager.h
 )
 
@@ -79,19 +76,7 @@ qt_add_qml_module(${PROJECT_NAME}
     QML_FILES
         qml/Main.qml
         qml/theme/Theme.qml
-        qml/components/ModeButton.qml
-        qml/components/ModeButtonGroup.qml
-        qml/components/SectionHeader.qml
-        qml/components/StatusDisplay.qml
-        qml/components/PercentSlider.qml
-        qml/components/ColorPicker.qml
-        qml/components/DropdownSelect.qml
         qml/components/IconButton.qml
-        qml/panels/PerformancePanel.qml
-        qml/panels/GpuPanel.qml
-        qml/panels/KeyboardPanel.qml
-        qml/panels/BatteryPanel.qml
-        qml/panels/FanCurvePanel.qml
         qml/dialogs/FanCurveDialog.qml
         qml/dialogs/AboutDialog.qml
     SOURCES
@@ -116,7 +101,6 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core
     ${CMAKE_CURRENT_SOURCE_DIR}/src/dbus
     ${CMAKE_CURRENT_SOURCE_DIR}/src/controllers
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/models
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tray
 )
 

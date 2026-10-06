@@ -15,7 +15,7 @@ PerformanceController::PerformanceController(AsusdClient *client, QObject *paren
 
     m_available = m_client->isConnected();
     if (m_available) {
-        m_currentProfile = static_cast<int>(m_client->platformProfile());
+        m_currentProfile = m_client->platformProfile();
     }
 }
 
@@ -28,32 +28,24 @@ QString PerformanceController::currentProfileName() const
 
 void PerformanceController::setProfile(int profile)
 {
-    qWarning() << ">>> PerformanceController::setProfile CALLED with:" << profile;
-
     if (!m_available) {
-        qWarning() << ">>> Not available!";
-        emit errorOccurred(tr("Performance control is not available"));
+        emit errorOccurred(tr("Performance control is not available (asusd not running)"));
         return;
     }
 
     if (profile < Quiet || profile > Performance) {
-        qWarning() << ">>> Invalid profile!";
         emit errorOccurred(tr("Invalid profile: %1").arg(profile));
         return;
     }
 
-    qWarning() << ">>> Current profile was:" << m_currentProfile << "-> Setting to:" << profile;
-
-    // Update UI immediately
+    // Update the UI immediately; AsusdClient re-syncs with the hardware if
+    // the change fails.
     if (m_currentProfile != profile) {
         m_currentProfile = profile;
         emit currentProfileChanged(profile);
-        qWarning() << ">>> Emitted currentProfileChanged";
     }
 
-    // Then send command to hardware
-    qWarning() << ">>> Calling setPlatformProfile";
-    m_client->setPlatformProfile(static_cast<quint32>(profile));
+    m_client->setPlatformProfile(profile);
 }
 
 QString PerformanceController::profileName(int profile) const
@@ -97,16 +89,11 @@ void PerformanceController::refresh()
     }
 }
 
-void PerformanceController::onProfileChanged(quint32 profile)
+void PerformanceController::onProfileChanged(int profile)
 {
-    qWarning() << ">>> onProfileChanged (from D-Bus) received:" << profile;
-    int newProfile = static_cast<int>(profile);
-    if (m_currentProfile != newProfile) {
-        qWarning() << ">>> D-Bus changing profile from" << m_currentProfile << "to" << newProfile;
-        m_currentProfile = newProfile;
-        emit currentProfileChanged(newProfile);
-    } else {
-        qWarning() << ">>> D-Bus profile same as current, ignoring";
+    if (m_currentProfile != profile) {
+        m_currentProfile = profile;
+        emit currentProfileChanged(profile);
     }
 }
 
@@ -117,7 +104,7 @@ void PerformanceController::onClientConnected(bool connected)
         emit availableChanged(connected);
 
         if (connected) {
-            m_currentProfile = static_cast<int>(m_client->platformProfile());
+            m_currentProfile = m_client->platformProfile();
             emit currentProfileChanged(m_currentProfile);
         }
     }

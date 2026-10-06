@@ -11,6 +11,7 @@
         <file>icons/hybrid.svg</file>
         <file>icons/dedicated.svg</file>
         <file>icons/vfio.svg</file>
+        <file>icons/optimized.svg</file>
         <file>icons/battery.svg</file>
         <file>icons/charging.svg</file>
         <file>icons/keyboard.svg</file>

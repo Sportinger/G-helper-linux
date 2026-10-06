@@ -3,7 +3,7 @@
 ## App starten
 
 ```bash
-pkill -9 -f g-helper-linux 2>/dev/null; sleep 0.5; env QT_QPA_PLATFORM=xcb /home/admin/Dokumente/G-helper-linux/build/g-helper-linux 2>&1 &
+pkill -9 -f g-helper-linux 2>/dev/null; sleep 0.5; env QT_QPA_PLATFORM=xcb "$(git rev-parse --show-toplevel)"/build/g-helper-linux 2>&1 &
 sleep 2
 pgrep -f g-helper-linux && echo "App läuft"
 ```

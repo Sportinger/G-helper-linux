@@ -20,6 +20,10 @@ TrayManager::TrayManager(PerformanceController *perfController,
             this, &TrayManager::onPerformanceProfileChanged);
     connect(m_gpuController, &GpuController::currentModeChanged,
             this, &TrayManager::onGpuModeChanged);
+    connect(m_gpuController, &GpuController::supportedModesChanged,
+            this, &TrayManager::updateGpuActions);
+    connect(m_gpuController, &GpuController::availableChanged,
+            this, &TrayManager::updateGpuActions);
 
     updateIcon();
     updateTooltip();
@@ -32,7 +36,9 @@ TrayManager::~TrayManager()
 
 bool TrayManager::isVisible() const
 {
-    return m_trayIcon->isVisible();
+    // Without a system tray (e.g. GNOME without AppIndicator extension) the
+    // icon is never shown, so the window must not hide into it.
+    return m_trayIcon->isVisible() && QSystemTrayIcon::isSystemTrayAvailable();
 }
 
 void TrayManager::setVisible(bool visible)
@@ -92,6 +98,10 @@ void TrayManager::createMenu()
     m_ultimateAction->setCheckable(true);
     connect(m_ultimateAction, &QAction::triggered, this, &TrayManager::setUltimateMode);
 
+    m_optimizedAction = m_gpuMenu->addAction(tr("Optimized (Auto)"));
+    m_optimizedAction->setCheckable(true);
+    connect(m_optimizedAction, &QAction::triggered, this, &TrayManager::setOptimizedMode);
+
     m_menu->addSeparator();
 
     // Show window action
@@ -105,6 +115,7 @@ void TrayManager::createMenu()
     // Set initial states
     onPerformanceProfileChanged(m_perfController->currentProfile());
     onGpuModeChanged(m_gpuController->currentMode());
+    updateGpuActions();
 }
 
 void TrayManager::updateIcon()
@@ -139,38 +150,63 @@ void TrayManager::onPerformanceProfileChanged(int profile)
 
 void TrayManager::onGpuModeChanged(int mode)
 {
-    m_ecoAction->setChecked(mode == 0);
-    m_standardAction->setChecked(mode == 1);
-    m_ultimateAction->setChecked(mode == 2);
+    m_ecoAction->setChecked(mode == GpuController::Eco);
+    m_standardAction->setChecked(mode == GpuController::Standard);
+    m_ultimateAction->setChecked(mode == GpuController::Ultimate);
+    m_optimizedAction->setChecked(mode == GpuController::Optimized);
     updateTooltip();
+}
+
+void TrayManager::updateGpuActions()
+{
+    const bool available = m_gpuController->isAvailable();
+    m_ecoAction->setVisible(m_gpuController->isModeSupported(GpuController::Eco));
+    m_standardAction->setVisible(m_gpuController->isModeSupported(GpuController::Standard));
+    m_ultimateAction->setVisible(m_gpuController->isModeSupported(GpuController::Ultimate));
+    m_optimizedAction->setVisible(m_gpuController->isModeSupported(GpuController::Optimized));
+    m_gpuMenu->setEnabled(available);
+    // QAction::triggered toggles the check mark; restore the real state
+    onGpuModeChanged(m_gpuController->currentMode());
 }
 
 void TrayManager::setQuietProfile()
 {
     m_perfController->setProfile(0);
+    onPerformanceProfileChanged(m_perfController->currentProfile());
 }
 
 void TrayManager::setBalancedProfile()
 {
     m_perfController->setProfile(1);
+    onPerformanceProfileChanged(m_perfController->currentProfile());
 }
 
 void TrayManager::setPerformanceProfile()
 {
     m_perfController->setProfile(2);
+    onPerformanceProfileChanged(m_perfController->currentProfile());
 }
 
 void TrayManager::setEcoMode()
 {
-    m_gpuController->setMode(0);
+    emit gpuModeRequested(GpuController::Eco);
+    onGpuModeChanged(m_gpuController->currentMode());
 }
 
 void TrayManager::setStandardMode()
 {
-    m_gpuController->setMode(1);
+    emit gpuModeRequested(GpuController::Standard);
+    onGpuModeChanged(m_gpuController->currentMode());
 }
 
 void TrayManager::setUltimateMode()
 {
-    m_gpuController->setMode(2);
+    emit gpuModeRequested(GpuController::Ultimate);
+    onGpuModeChanged(m_gpuController->currentMode());
+}
+
+void TrayManager::setOptimizedMode()
+{
+    emit gpuModeRequested(GpuController::Optimized);
+    onGpuModeChanged(m_gpuController->currentMode());
 }

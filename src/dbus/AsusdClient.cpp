@@ -1,418 +1,674 @@
 #include "AsusdClient.h"
-#include <QDBusPendingReply>
+#include <QDBusArgument>
+#include <QDBusConnectionInterface>
+#include <QDBusMessage>
 #include <QDBusReply>
+#include <QDBusVariant>
 #include <QDebug>
-#include <QRegularExpression>
 #include <QProcess>
-#include <QTimer>
+#include <QXmlStreamReader>
+
+namespace {
+
+// Returns the names of the direct child nodes of an introspected object
+QStringList childNodes(const QString &xml)
+{
+    QStringList nodes;
+    QXmlStreamReader reader(xml);
+    int depth = 0;
+    while (!reader.atEnd()) {
+        reader.readNext();
+        if (reader.isStartElement()) {
+            depth++;
+            if (depth == 2 && reader.name() == QLatin1String("node")) {
+                const QString name = reader.attributes().value("name").toString();
+                if (!name.isEmpty())
+                    nodes << name;
+            }
+        } else if (reader.isEndElement()) {
+            depth--;
+        }
+    }
+    return nodes;
+}
+
+QString introspect(const QString &service, const QString &path)
+{
+    QDBusMessage msg = QDBusMessage::createMethodCall(
+        service, path, "org.freedesktop.DBus.Introspectable", "Introspect");
+    QDBusReply<QString> reply = QDBusConnection::systemBus().call(msg, QDBus::Block, 2000);
+    return reply.isValid() ? reply.value() : QString();
+}
+
+int speedFromString(const QString &speed)
+{
+    if (speed.compare("Low", Qt::CaseInsensitive) == 0) return 0;
+    if (speed.compare("High", Qt::CaseInsensitive) == 0) return 2;
+    return 1;
+}
+
+QString speedToString(int speed)
+{
+    switch (speed) {
+        case 0: return QStringLiteral("Low");
+        case 2: return QStringLiteral("High");
+        default: return QStringLiteral("Med");
+    }
+}
+
+QString dbusErrorText(const QString &text, const QDBusError &error)
+{
+    return error.message().isEmpty() ? text : QStringLiteral("%1: %2").arg(text, error.message());
+}
+
+}
 
 AsusdClient::AsusdClient(QObject *parent)
     : QObject(parent)
 {
-    registerDBusTypes();
-    setupConnections();
+    QDBusConnection bus = QDBusConnection::systemBus();
+
+    m_serviceWatcher = new QDBusServiceWatcher(
+        SERVICE, bus,
+        QDBusServiceWatcher::WatchForRegistration | QDBusServiceWatcher::WatchForUnregistration,
+        this);
+    connect(m_serviceWatcher, &QDBusServiceWatcher::serviceRegistered,
+            this, &AsusdClient::onServiceRegistered);
+    connect(m_serviceWatcher, &QDBusServiceWatcher::serviceUnregistered,
+            this, &AsusdClient::onServiceUnregistered);
+
+    if (bus.interface() && bus.interface()->isServiceRegistered(SERVICE)) {
+        connectToService();
+    } else {
+        qWarning() << "AsusdClient: asusd is not running, waiting for it";
+    }
 }
 
 AsusdClient::~AsusdClient() = default;
 
-void AsusdClient::setupConnections()
+void AsusdClient::onServiceRegistered()
 {
+    qDebug() << "AsusdClient: asusd appeared on the bus";
+    connectToService();
+}
+
+void AsusdClient::onServiceUnregistered()
+{
+    qWarning() << "AsusdClient: asusd disappeared from the bus";
+    disconnectFromService();
+}
+
+void AsusdClient::connectToService()
+{
+    if (m_connected)
+        return;
+
     QDBusConnection bus = QDBusConnection::systemBus();
+    bus.connect(SERVICE, PATH_PLATFORM, INTERFACE_PROPERTIES, "PropertiesChanged",
+                this, SLOT(onPropertiesChanged(QString,QVariantMap,QStringList)));
 
-    m_platformInterface = new QDBusInterface(
-        SERVICE, PATH_PLATFORM, "org.freedesktop.DBus.Properties", bus, this);
-
-    m_connected = m_platformInterface->isValid();
-
-    if (m_connected) {
-        // Connect to PropertiesChanged signal
-        bus.connect(SERVICE, PATH_PLATFORM, "org.freedesktop.DBus.Properties",
-                    "PropertiesChanged", this, SLOT(onPropertiesChanged(QString, QVariantMap, QStringList)));
-
-        refresh();
+    findDevices();
+    if (!m_auraPath.isEmpty()) {
+        bus.connect(SERVICE, m_auraPath, INTERFACE_PROPERTIES, "PropertiesChanged",
+                    this, SLOT(onPropertiesChanged(QString,QVariantMap,QStringList)));
     }
+
+    m_connected = true;
+    emit connectedChanged(true);
+
+    refresh();
+}
+
+void AsusdClient::disconnectFromService()
+{
+    if (!m_connected)
+        return;
+
+    QDBusConnection bus = QDBusConnection::systemBus();
+    bus.disconnect(SERVICE, PATH_PLATFORM, INTERFACE_PROPERTIES, "PropertiesChanged",
+                   this, SLOT(onPropertiesChanged(QString,QVariantMap,QStringList)));
+    if (!m_auraPath.isEmpty()) {
+        bus.disconnect(SERVICE, m_auraPath, INTERFACE_PROPERTIES, "PropertiesChanged",
+                       this, SLOT(onPropertiesChanged(QString,QVariantMap,QStringList)));
+    }
+
+    m_auraPath.clear();
+    m_hasSlash = false;
+    m_connected = false;
+    emit connectedChanged(false);
+}
+
+void AsusdClient::findDevices()
+{
+    m_auraPath.clear();
+    m_hasSlash = false;
+
+    const QString auraRoot = QStringLiteral("/xyz/ljones/aura");
+    const QStringList nodes = childNodes(introspect(SERVICE, auraRoot));
+
+    for (const QString &node : nodes) {
+        const QString path = auraRoot + "/" + node;
+        const QString xml = introspect(SERVICE, path);
+
+        if (node == QLatin1String("slash")) {
+            m_hasSlash = xml.contains(QLatin1String("\"xyz.ljones.Slash\""));
+            continue;
+        }
+        // AniMe matrix and external SCSI devices are not the keyboard
+        if (node == QLatin1String("anime") || node.endsWith(QLatin1String("_scsi")))
+            continue;
+
+        if (m_auraPath.isEmpty() && xml.contains(QLatin1String("\"xyz.ljones.Aura\"")))
+            m_auraPath = path;
+    }
+
+    qDebug() << "AsusdClient: keyboard aura device:" << (m_auraPath.isEmpty() ? "none" : m_auraPath)
+             << "slash:" << m_hasSlash;
 }
 
 void AsusdClient::refresh()
 {
-    if (!m_connected) return;
+    if (!m_connected)
+        return;
 
+    fetchPlatformProfileChoices();
     fetchPlatformProfile();
     fetchChargeLimit();
-    fetchLedBrightness();
+    fetchLedState();
+}
+
+// --- Generic property helpers --------------------------------------------
+
+void AsusdClient::getProperty(const QString &path, const QString &interface, const QString &name,
+                              std::function<void(const QVariant &)> onSuccess)
+{
+    QDBusMessage msg = QDBusMessage::createMethodCall(SERVICE, path, INTERFACE_PROPERTIES, "Get");
+    msg << interface << name;
+
+    auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(msg), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this,
+            [name, onSuccess](QDBusPendingCallWatcher *w) {
+        w->deleteLater();
+        const QDBusMessage reply = w->reply();
+        if (reply.type() == QDBusMessage::ErrorMessage || reply.arguments().isEmpty()) {
+            qWarning() << "AsusdClient: failed to read" << name << ":" << reply.errorMessage();
+            return;
+        }
+        onSuccess(reply.arguments().constFirst().value<QDBusVariant>().variant());
+    });
+}
+
+void AsusdClient::setProperty(const QString &path, const QString &interface, const QString &name,
+                              const QVariant &value, std::function<void()> onSuccess,
+                              const QString &errorText, std::function<void()> onError)
+{
+    if (!m_connected) {
+        emit errorOccurred(tr("asusd is not running"));
+        if (onError) onError();
+        return;
+    }
+
+    QDBusMessage msg = QDBusMessage::createMethodCall(SERVICE, path, INTERFACE_PROPERTIES, "Set");
+    msg << interface << name << QVariant::fromValue(QDBusVariant(value));
+
+    auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(msg), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this,
+            [this, name, onSuccess, onError, errorText](QDBusPendingCallWatcher *w) {
+        w->deleteLater();
+        QDBusPendingReply<> reply = *w;
+        if (reply.isError()) {
+            qWarning() << "AsusdClient: failed to set" << name << ":" << reply.error().message();
+            emit errorOccurred(dbusErrorText(errorText, reply.error()));
+            if (onError) onError();
+            return;
+        }
+        if (onSuccess) onSuccess();
+    });
+}
+
+// --- Platform profile ------------------------------------------------------
+
+int AsusdClient::profileFromDbus(quint32 dbusProfile)
+{
+    switch (dbusProfile) {
+        case AsusdProfile::Balanced: return ProfileBalanced;
+        case AsusdProfile::Performance: return ProfilePerformance;
+        case AsusdProfile::Quiet: return ProfileQuiet;
+        case AsusdProfile::LowPower: return ProfileQuiet;
+        default:
+            qWarning() << "AsusdClient: unexpected platform profile" << dbusProfile << "- treating as Balanced";
+            return ProfileBalanced;
+    }
+}
+
+quint32 AsusdClient::profileToDbus(int profile) const
+{
+    switch (profile) {
+        case ProfileQuiet:
+            // Some models only offer "low-power" instead of "quiet"
+            if (!m_profileChoices.isEmpty() && !m_profileChoices.contains(AsusdProfile::Quiet)
+                && m_profileChoices.contains(AsusdProfile::LowPower)) {
+                return AsusdProfile::LowPower;
+            }
+            return AsusdProfile::Quiet;
+        case ProfilePerformance:
+            return AsusdProfile::Performance;
+        default:
+            return AsusdProfile::Balanced;
+    }
+}
+
+QString AsusdClient::dbusProfileName(quint32 dbusProfile)
+{
+    switch (dbusProfile) {
+        case AsusdProfile::Performance: return QStringLiteral("Performance");
+        case AsusdProfile::Quiet: return QStringLiteral("Quiet");
+        case AsusdProfile::LowPower: return QStringLiteral("LowPower");
+        default: return QStringLiteral("Balanced");
+    }
 }
 
 void AsusdClient::fetchPlatformProfile()
 {
-    QDBusPendingCall call = m_platformInterface->asyncCall("Get", INTERFACE_PLATFORM, "PlatformProfile");
-    auto *watcher = new QDBusPendingCallWatcher(call, this);
-    connect(watcher, &QDBusPendingCallWatcher::finished,
-            this, &AsusdClient::onPlatformProfileResult);
-}
-
-void AsusdClient::onPlatformProfileResult(QDBusPendingCallWatcher *watcher)
-{
-    QDBusPendingReply<QDBusVariant> reply = *watcher;
-    if (reply.isError()) {
-        qWarning() << "Failed to get platform profile:" << reply.error().message();
-    } else {
-        quint32 profile = reply.value().variant().toUInt();
+    getProperty(PATH_PLATFORM, INTERFACE_PLATFORM, "PlatformProfile", [this](const QVariant &value) {
+        const int profile = profileFromDbus(value.toUInt());
         if (m_platformProfile != profile) {
             m_platformProfile = profile;
             emit platformProfileChanged(profile);
         }
-    }
-    watcher->deleteLater();
+    });
 }
 
-void AsusdClient::setPlatformProfile(quint32 profile)
+void AsusdClient::fetchPlatformProfileChoices()
 {
-    // Convert profile number to name
-    QString profileName;
-    switch (profile) {
-        case 0: profileName = "Quiet"; break;
-        case 1: profileName = "Balanced"; break;
-        case 2: profileName = "Performance"; break;
-        default:
-            qWarning() << "AsusdClient: Invalid profile:" << profile;
-            return;
+    getProperty(PATH_PLATFORM, INTERFACE_PLATFORM, "PlatformProfileChoices", [this](const QVariant &value) {
+        m_profileChoices.clear();
+        if (value.canConvert<QDBusArgument>()) {
+            const QDBusArgument arg = value.value<QDBusArgument>();
+            arg.beginArray();
+            while (!arg.atEnd()) {
+                quint32 choice = 0;
+                arg >> choice;
+                m_profileChoices << choice;
+            }
+            arg.endArray();
+        } else {
+            for (const QVariant &v : value.toList())
+                m_profileChoices << v.toUInt();
+        }
+    });
+}
+
+void AsusdClient::setPlatformProfile(int profile)
+{
+    if (profile < ProfileQuiet || profile > ProfilePerformance) {
+        qWarning() << "AsusdClient: invalid profile" << profile;
+        return;
     }
 
-    // Update local state immediately and ignore D-Bus updates for a bit
-    m_platformProfile = profile;
-    m_ignoringProfileUpdates = true;
-    m_profileSetTimer.start();
+    setProperty(PATH_PLATFORM, INTERFACE_PLATFORM, "PlatformProfile",
+                QVariant::fromValue(profileToDbus(profile)),
+                [this, profile]() {
+                    if (m_platformProfile != profile) {
+                        m_platformProfile = profile;
+                        emit platformProfileChanged(profile);
+                    }
+                },
+                tr("Failed to set performance profile"),
+                [this]() {
+                    // Re-sync the UI with the real hardware state
+                    fetchPlatformProfile();
+                });
+}
 
-    // Run asusctl asynchronously - UI already updated by PerformanceController
-    QProcess *process = new QProcess(this);
-    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, process, profileName](int exitCode, QProcess::ExitStatus) {
-        if (exitCode != 0) {
-            QString error = QString::fromUtf8(process->readAllStandardError());
-            qWarning() << "AsusdClient: Failed to set profile:" << error;
-            emit errorOccurred(tr("Failed to set performance profile"));
+// --- Battery ---------------------------------------------------------------
+
+void AsusdClient::fetchChargeLimit()
+{
+    getProperty(PATH_PLATFORM, INTERFACE_PLATFORM, "ChargeControlEndThreshold", [this](const QVariant &value) {
+        const quint8 limit = static_cast<quint8>(value.toUInt());
+        if (m_chargeLimit != limit) {
+            m_chargeLimit = limit;
+            emit chargeLimitChanged(limit);
         }
-        // Stop ignoring after command completes (with small delay for D-Bus)
-        QTimer::singleShot(500, this, [this]() {
-            m_ignoringProfileUpdates = false;
-        });
-        process->deleteLater();
+    });
+}
+
+void AsusdClient::setChargeLimit(quint8 limit)
+{
+    setProperty(PATH_PLATFORM, INTERFACE_PLATFORM, "ChargeControlEndThreshold",
+                QVariant::fromValue(static_cast<uchar>(limit)),
+                [this, limit]() {
+                    if (m_chargeLimit != limit) {
+                        m_chargeLimit = limit;
+                        emit chargeLimitChanged(limit);
+                    }
+                },
+                tr("Failed to set charge limit"),
+                [this]() { fetchChargeLimit(); });
+}
+
+// --- Keyboard LED ----------------------------------------------------------
+
+void AsusdClient::fetchLedState()
+{
+    if (m_auraPath.isEmpty())
+        return;
+
+    getProperty(m_auraPath, INTERFACE_AURA, "Brightness", [this](const QVariant &value) {
+        const quint32 brightness = value.toUInt();
+        if (m_ledBrightness != brightness) {
+            m_ledBrightness = brightness;
+            emit ledBrightnessChanged(brightness);
+        }
     });
 
-    process->start("asusctl", QStringList{"profile", "set", profileName});
+    getProperty(m_auraPath, INTERFACE_AURA, "SupportedBasicModes", [this](const QVariant &value) {
+        applySupportedAuraModes(value);
+    });
+
+    getProperty(m_auraPath, INTERFACE_AURA, "LedModeData", [this](const QVariant &value) {
+        if (applyAuraEffect(value))
+            emit auraModeDataChanged();
+    });
 }
+
+void AsusdClient::applySupportedAuraModes(const QVariant &value)
+{
+    QList<quint32> modes;
+    if (value.canConvert<QDBusArgument>()) {
+        const QDBusArgument arg = value.value<QDBusArgument>();
+        arg.beginArray();
+        while (!arg.atEnd()) {
+            quint32 mode = 0;
+            arg >> mode;
+            modes << mode;
+        }
+        arg.endArray();
+    } else {
+        for (const QVariant &v : value.toList())
+            modes << v.toUInt();
+    }
+    std::sort(modes.begin(), modes.end());
+
+    if (m_supportedAuraModes != modes) {
+        m_supportedAuraModes = modes;
+        emit supportedAuraModesChanged();
+    }
+}
+
+bool AsusdClient::applyAuraEffect(const QVariant &value)
+{
+    if (!value.canConvert<QDBusArgument>())
+        return false;
+
+    const QDBusArgument arg = value.value<QDBusArgument>();
+    if (arg.currentSignature() != QLatin1String("(uu(yyy)(yyy)ss)")) {
+        qWarning() << "AsusdClient: unexpected LedModeData signature" << arg.currentSignature();
+        return false;
+    }
+
+    quint32 mode = 0, zone = 0;
+    uchar r1 = 0, g1 = 0, b1 = 0, r2 = 0, g2 = 0, b2 = 0;
+    QString speed, direction;
+
+    arg.beginStructure();
+    arg >> mode >> zone;
+    arg.beginStructure();
+    arg >> r1 >> g1 >> b1;
+    arg.endStructure();
+    arg.beginStructure();
+    arg >> r2 >> g2 >> b2;
+    arg.endStructure();
+    arg >> speed >> direction;
+    arg.endStructure();
+
+    m_auraMode = mode;
+    m_auraColor1 = QColor(r1, g1, b1);
+    m_auraColor2 = QColor(r2, g2, b2);
+    m_auraSpeed = speedFromString(speed);
+    return true;
+}
+
+void AsusdClient::setLedBrightness(quint32 level)
+{
+    if (m_auraPath.isEmpty()) {
+        emit errorOccurred(tr("No keyboard backlight found"));
+        return;
+    }
+
+    setProperty(m_auraPath, INTERFACE_AURA, "Brightness", QVariant::fromValue(level),
+                [this, level]() {
+                    if (m_ledBrightness != level) {
+                        m_ledBrightness = level;
+                        emit ledBrightnessChanged(level);
+                    }
+                },
+                tr("Failed to set keyboard brightness"),
+                [this]() { fetchLedState(); });
+}
+
+void AsusdClient::setLedMode(quint32 mode, const QColor &color1, const QColor &color2, int speed)
+{
+    if (m_auraPath.isEmpty()) {
+        emit errorOccurred(tr("No keyboard backlight found"));
+        return;
+    }
+
+    const QColor c2 = color2.isValid() ? color2 : QColor(0, 0, 0);
+
+    // LedModeData has the signature (uu(yyy)(yyy)ss):
+    // mode, zone, colour1, colour2, speed, direction
+    QDBusArgument effect;
+    effect.beginStructure();
+    effect << mode << quint32(0);
+    effect.beginStructure();
+    effect << uchar(color1.red()) << uchar(color1.green()) << uchar(color1.blue());
+    effect.endStructure();
+    effect.beginStructure();
+    effect << uchar(c2.red()) << uchar(c2.green()) << uchar(c2.blue());
+    effect.endStructure();
+    effect << speedToString(speed) << QStringLiteral("Right");
+    effect.endStructure();
+
+    setProperty(m_auraPath, INTERFACE_AURA, "LedModeData", QVariant::fromValue(effect),
+                [this, mode, color1, c2, speed]() {
+                    m_auraMode = mode;
+                    m_auraColor1 = color1;
+                    m_auraColor2 = c2;
+                    m_auraSpeed = speed;
+                    emit auraModeDataChanged();
+                },
+                tr("Failed to set keyboard effect"),
+                [this]() { fetchLedState(); });
+}
+
+// --- Change notifications --------------------------------------------------
 
 void AsusdClient::onPropertiesChanged(const QString &interface, const QVariantMap &changed, const QStringList &invalidated)
 {
-    Q_UNUSED(invalidated)
-
-    if (interface == INTERFACE_PLATFORM) {
+    if (interface == QLatin1String(INTERFACE_PLATFORM)) {
         if (changed.contains("PlatformProfile")) {
-            // Ignore D-Bus updates if we recently set the profile ourselves
-            if (!m_ignoringProfileUpdates) {
-                quint32 profile = changed["PlatformProfile"].toUInt();
-                if (m_platformProfile != profile) {
-                    m_platformProfile = profile;
-                    emit platformProfileChanged(profile);
-                }
+            const int profile = profileFromDbus(changed.value("PlatformProfile").toUInt());
+            if (m_platformProfile != profile) {
+                m_platformProfile = profile;
+                emit platformProfileChanged(profile);
             }
+        } else if (invalidated.contains("PlatformProfile")) {
+            fetchPlatformProfile();
         }
+
         if (changed.contains("ChargeControlEndThreshold")) {
-            quint8 limit = static_cast<quint8>(changed["ChargeControlEndThreshold"].toUInt());
+            const quint8 limit = static_cast<quint8>(changed.value("ChargeControlEndThreshold").toUInt());
             if (m_chargeLimit != limit) {
                 m_chargeLimit = limit;
                 emit chargeLimitChanged(limit);
             }
+        } else if (invalidated.contains("ChargeControlEndThreshold")) {
+            fetchChargeLimit();
         }
-    } else if (interface == INTERFACE_AURA) {
+    } else if (interface == QLatin1String(INTERFACE_AURA)) {
         if (changed.contains("Brightness")) {
-            quint32 brightness = changed["Brightness"].toUInt();
+            const quint32 brightness = changed.value("Brightness").toUInt();
             if (m_ledBrightness != brightness) {
                 m_ledBrightness = brightness;
                 emit ledBrightnessChanged(brightness);
             }
         }
+        if (changed.contains("LedModeData")) {
+            if (applyAuraEffect(changed.value("LedModeData")))
+                emit auraModeDataChanged();
+        }
+        if (invalidated.contains("Brightness") || invalidated.contains("LedModeData"))
+            fetchLedState();
     }
 }
 
-void AsusdClient::fetchChargeLimit()
-{
-    if (!m_connected) return;
+// --- Fan curves ------------------------------------------------------------
 
-    QDBusPendingCall call = m_platformInterface->asyncCall("Get", INTERFACE_PLATFORM, "ChargeControlEndThreshold");
-    auto *watcher = new QDBusPendingCallWatcher(call, this);
-    connect(watcher, &QDBusPendingCallWatcher::finished,
-            this, &AsusdClient::onChargeLimitResult);
-}
-
-void AsusdClient::onChargeLimitResult(QDBusPendingCallWatcher *watcher)
+void AsusdClient::callFanCurves(const QString &method, const QVariantList &args,
+                                std::function<void(const QDBusMessage &)> onSuccess,
+                                const QString &errorText)
 {
-    QDBusPendingReply<QDBusVariant> reply = *watcher;
-    if (reply.isError()) {
-        qWarning() << "Failed to get charge limit:" << reply.error().message();
-    } else {
-        quint8 limit = static_cast<quint8>(reply.value().variant().toUInt());
-        if (m_chargeLimit != limit) {
-            m_chargeLimit = limit;
-            emit chargeLimitChanged(limit);
-        }
+    if (!m_connected) {
+        emit errorOccurred(tr("asusd is not running"));
+        return;
     }
-    watcher->deleteLater();
-}
 
-void AsusdClient::setChargeLimit(quint8 limit)
-{
-    if (!m_connected) return;
+    QDBusMessage msg = QDBusMessage::createMethodCall(SERVICE, PATH_PLATFORM, INTERFACE_FAN_CURVES, method);
+    msg.setArguments(args);
 
-    qDebug() << "AsusdClient: Setting charge limit to" << limit;
-
-    // Use busctl for reliable property setting - async to not block UI
-    QStringList args;
-    args << "set-property"
-         << SERVICE
-         << PATH_PLATFORM
-         << INTERFACE_PLATFORM
-         << "ChargeControlEndThreshold"
-         << "y"
-         << QString::number(limit);
-
-    QProcess *process = new QProcess(this);
-    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, process, limit](int exitCode, QProcess::ExitStatus) {
-        if (exitCode != 0) {
-            qWarning() << "Failed to set charge limit:" << process->readAllStandardError();
-            emit errorOccurred(tr("Failed to set charge limit"));
-        } else {
-            qDebug() << "AsusdClient: Charge limit set successfully";
-            m_chargeLimit = limit;
-            emit chargeLimitChanged(limit);
-        }
-        process->deleteLater();
-    });
-
-    process->start("busctl", args);
-}
-
-void AsusdClient::findAuraDevice()
-{
-    // Find the aura device path dynamically
-    QDBusMessage msg = QDBusMessage::createMethodCall(
-        "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "ListNames");
-
-    QDBusConnection bus = QDBusConnection::systemBus();
-
-    // Try to introspect to find aura path
-    QDBusMessage introMsg = QDBusMessage::createMethodCall(
-        SERVICE, "/xyz/ljones/aura", "org.freedesktop.DBus.Introspectable", "Introspect");
-
-    QDBusReply<QString> introReply = bus.call(introMsg);
-    if (introReply.isValid()) {
-        QString xml = introReply.value();
-        // Parse to find child nodes like "19b6_3_4"
-        QRegularExpression re("node name=\"([^\"]+)\"");
-        QRegularExpressionMatch match = re.match(xml);
-        if (match.hasMatch()) {
-            m_auraPath = "/xyz/ljones/aura/" + match.captured(1);
-            m_auraInterface = new QDBusInterface(
-                SERVICE, m_auraPath, "org.freedesktop.DBus.Properties", bus, this);
-        }
-    }
-}
-
-void AsusdClient::fetchLedBrightness()
-{
-    if (m_auraPath.isEmpty()) {
-        findAuraDevice();
-    }
-    if (!m_auraInterface || !m_auraInterface->isValid()) return;
-
-    QDBusPendingCall call = m_auraInterface->asyncCall("Get", INTERFACE_AURA, "Brightness");
-    auto *watcher = new QDBusPendingCallWatcher(call, this);
-    connect(watcher, &QDBusPendingCallWatcher::finished,
-            this, &AsusdClient::onLedBrightnessResult);
-}
-
-void AsusdClient::onLedBrightnessResult(QDBusPendingCallWatcher *watcher)
-{
-    QDBusPendingReply<QDBusVariant> reply = *watcher;
-    if (reply.isError()) {
-        qWarning() << "Failed to get LED brightness:" << reply.error().message();
-    } else {
-        quint32 brightness = reply.value().variant().toUInt();
-        if (m_ledBrightness != brightness) {
-            m_ledBrightness = brightness;
-            emit ledBrightnessChanged(brightness);
-        }
-    }
-    watcher->deleteLater();
-}
-
-void AsusdClient::setLedBrightness(quint32 level)
-{
-    if (!m_connected || m_auraPath.isEmpty()) return;
-
-    QDBusMessage msg = QDBusMessage::createMethodCall(
-        SERVICE, m_auraPath, "org.freedesktop.DBus.Properties", "Set");
-    msg << INTERFACE_AURA << "Brightness" << QVariant::fromValue(QDBusVariant(level));
-
-    QDBusPendingCall call = QDBusConnection::systemBus().asyncCall(msg);
-    auto *watcher = new QDBusPendingCallWatcher(call, this);
-    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, level](QDBusPendingCallWatcher *w) {
-        QDBusPendingReply<> reply = *w;
-        if (reply.isError()) {
-            qWarning() << "Failed to set LED brightness:" << reply.error().message();
-            emit errorOccurred(tr("Failed to set LED brightness: %1").arg(reply.error().message()));
-        } else {
-            m_ledBrightness = level;
-            emit ledBrightnessChanged(level);
-        }
+    auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(msg), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this,
+            [this, method, onSuccess, errorText](QDBusPendingCallWatcher *w) {
         w->deleteLater();
-    });
-}
-
-void AsusdClient::setLedMode(quint32 mode, const QColor &color1, const QColor &color2, quint8 speed)
-{
-    if (!m_connected || m_auraPath.isEmpty()) {
-        findAuraDevice();
-        if (m_auraPath.isEmpty()) {
-            qWarning() << "AsusdClient: Aura device not found";
+        const QDBusMessage reply = w->reply();
+        if (reply.type() == QDBusMessage::ErrorMessage) {
+            qWarning() << "AsusdClient:" << method << "failed:" << reply.errorMessage();
+            if (!errorText.isEmpty())
+                emit errorOccurred(QStringLiteral("%1: %2").arg(errorText, reply.errorMessage()));
+            else
+                emit fanCurvesUnavailable();
             return;
         }
-    }
-
-    qDebug() << "AsusdClient: Setting LED mode" << mode << "color1:" << color1;
-
-    // LedModeData property has signature (uu(yyy)(yyy)ss)
-    QString speedStr = "Med";
-    if (speed == 0) speedStr = "Low";
-    else if (speed == 2) speedStr = "High";
-
-    // Use busctl-style command via QProcess for reliability - async to not block UI
-    QStringList args;
-    args << "set-property"
-         << SERVICE
-         << m_auraPath
-         << INTERFACE_AURA
-         << "LedModeData"
-         << "(uu(yyy)(yyy)ss)"
-         << QString::number(mode)
-         << "0"  // zone
-         << QString::number(color1.red())
-         << QString::number(color1.green())
-         << QString::number(color1.blue())
-         << QString::number(color2.isValid() ? color2.red() : 0)
-         << QString::number(color2.isValid() ? color2.green() : 0)
-         << QString::number(color2.isValid() ? color2.blue() : 0)
-         << speedStr
-         << "Right";
-
-    QProcess *process = new QProcess(this);
-    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, process](int exitCode, QProcess::ExitStatus) {
-        if (exitCode != 0) {
-            qWarning() << "Failed to set LED mode:" << process->readAllStandardError();
-            emit errorOccurred(tr("Failed to set LED mode"));
-        } else {
-            qDebug() << "AsusdClient: LED mode set successfully";
-        }
-        process->deleteLater();
+        if (onSuccess) onSuccess(reply);
     });
-
-    process->start("busctl", args);
 }
 
-QVariantList AsusdClient::getFanCurves(quint32 profile)
+void AsusdClient::fetchFanCurves(int profile)
 {
-    QVariantList result;
-    // Fan curve retrieval would be implemented based on actual asusd fan curve API
-    // For now, return default curves
+    callFanCurves("FanCurveData", {QVariant::fromValue(profileToDbus(profile))},
+                  [this, profile](const QDBusMessage &reply) {
+        if (reply.arguments().isEmpty() || !reply.arguments().constFirst().canConvert<QDBusArgument>()) {
+            emit fanCurvesUnavailable();
+            return;
+        }
 
-    // CPU fan default curve
-    QVariantMap cpuCurve;
-    cpuCurve["fanType"] = 0;
-    cpuCurve["enabled"] = true;
-    QVariantList cpuPoints;
-    cpuPoints << QVariantMap{{"temp", 30}, {"fan", 0}};
-    cpuPoints << QVariantMap{{"temp", 40}, {"fan", 20}};
-    cpuPoints << QVariantMap{{"temp", 50}, {"fan", 35}};
-    cpuPoints << QVariantMap{{"temp", 60}, {"fan", 50}};
-    cpuPoints << QVariantMap{{"temp", 70}, {"fan", 70}};
-    cpuPoints << QVariantMap{{"temp", 80}, {"fan", 85}};
-    cpuPoints << QVariantMap{{"temp", 90}, {"fan", 95}};
-    cpuPoints << QVariantMap{{"temp", 100}, {"fan", 100}};
-    cpuCurve["points"] = cpuPoints;
-    result << cpuCurve;
+        // a(sayayb): fan, pwm[8], temp[8], enabled
+        const QDBusArgument arg = reply.arguments().constFirst().value<QDBusArgument>();
+        QVariantList curves;
 
-    // GPU fan default curve
-    QVariantMap gpuCurve;
-    gpuCurve["fanType"] = 1;
-    gpuCurve["enabled"] = true;
-    gpuCurve["points"] = cpuPoints; // Same as CPU for default
-    result << gpuCurve;
+        arg.beginArray();
+        while (!arg.atEnd()) {
+            QString fanName;
+            QByteArray pwm, temp;
+            bool enabled = false;
 
-    return result;
+            arg.beginStructure();
+            arg >> fanName >> pwm >> temp >> enabled;
+            arg.endStructure();
+
+            int fan = FanCpu;
+            if (fanName.compare("GPU", Qt::CaseInsensitive) == 0) fan = FanGpu;
+            else if (fanName.compare("MID", Qt::CaseInsensitive) == 0) fan = FanMid;
+
+            QVariantList points;
+            const int count = qMin(pwm.size(), temp.size());
+            for (int i = 0; i < count; ++i) {
+                points << QVariantMap{
+                    {"temp", static_cast<int>(static_cast<uchar>(temp.at(i)))},
+                    {"fan", qRound(static_cast<uchar>(pwm.at(i)) * 100.0 / 255.0)}
+                };
+            }
+
+            curves << QVariantMap{{"fan", fan}, {"enabled", enabled}, {"points", points}};
+        }
+        arg.endArray();
+
+        emit fanCurvesReceived(profile, curves);
+    }, QString());
 }
 
-void AsusdClient::setFanCurve(quint32 profile, quint32 fanType, const QVariantList &points, bool enabled)
+void AsusdClient::setFanCurve(int profile, int fan, const QVariantList &points, bool enabled)
 {
-    if (!m_connected) return;
-
-    // Convert profile to name
-    QString profileName;
-    switch (profile) {
-        case 0: profileName = "Quiet"; break;
-        case 1: profileName = "Balanced"; break;
-        case 2: profileName = "Performance"; break;
-        default: return;
+    if (!m_connected) {
+        emit errorOccurred(tr("asusd is not running"));
+        return;
     }
 
-    // Convert fan type to name
-    QString fanName = (fanType == 0) ? "cpu" : "gpu";
+    if (points.size() != 8) {
+        emit errorOccurred(tr("A fan curve needs exactly 8 points"));
+        return;
+    }
 
-    // Build curve data string: "30c:0%,40c:15%,..."
+    // asusd rejects curves where temperature or fan speed decreases
     QStringList dataPoints;
+    int prevTemp = -1, prevFan = -1;
     for (const QVariant &point : points) {
-        QVariantMap p = point.toMap();
-        int temp = p["temp"].toInt();
-        int fan = p["fan"].toInt();
-        dataPoints << QString("%1c:%2%").arg(temp).arg(fan);
-    }
-    QString curveData = dataPoints.join(",");
-
-    qDebug() << "AsusdClient: Setting fan curve for" << profileName << fanName << ":" << curveData;
-
-    // Run asynchronously to not block UI
-    QProcess *process = new QProcess(this);
-    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, process, profileName, fanName, enabled](int exitCode, QProcess::ExitStatus) {
-        if (exitCode != 0) {
-            QString error = QString::fromUtf8(process->readAllStandardError());
-            qWarning() << "Failed to set fan curve:" << error;
-        } else {
-            qDebug() << "AsusdClient: Fan curve set successfully";
-
-            // Enable the fan curve asynchronously
-            QProcess *enableProcess = new QProcess(this);
-            connect(enableProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-                    enableProcess, &QProcess::deleteLater);
-
-            QStringList enableArgs;
-            enableArgs << "fan-curve" << "--mod-profile" << profileName
-                       << "--enable-fan-curves" << (enabled ? "true" : "false");
-            enableProcess->start("asusctl", enableArgs);
+        const QVariantMap p = point.toMap();
+        const int temp = qBound(0, p.value("temp").toInt(), 255);
+        const int fanPercent = qBound(0, p.value("fan").toInt(), 100);
+        if (temp < prevTemp || fanPercent < prevFan) {
+            emit errorOccurred(tr("Fan curve must not decrease"));
+            return;
         }
-        process->deleteLater();
-    });
+        prevTemp = temp;
+        prevFan = fanPercent;
+        dataPoints << QStringLiteral("%1c:%2%").arg(temp).arg(fanPercent);
+    }
 
-    QStringList args;
-    args << "fan-curve" << "--mod-profile" << profileName << "--fan" << fanName << "--data" << curveData;
+    const quint32 dbusProfile = profileToDbus(profile);
+    const QString fanName = (fan == FanGpu) ? "gpu" : (fan == FanMid) ? "mid" : "cpu";
+    const QStringList args{"fan-curve", "--mod-profile", dbusProfileName(dbusProfile),
+                           "--fan", fanName, "--data", dataPoints.join(",")};
+
+    qDebug() << "AsusdClient: asusctl" << args;
+
+    // Writing curve data through asusctl stores it disabled, so the enabled
+    // state is (re)applied afterwards over D-Bus.
+    auto *process = new QProcess(this);
+    connect(process, &QProcess::finished, this,
+            [this, process, profile, enabled](int exitCode, QProcess::ExitStatus status) {
+        process->deleteLater();
+        if (status != QProcess::NormalExit || exitCode != 0) {
+            const QString error = QString::fromUtf8(process->readAllStandardError()).trimmed();
+            qWarning() << "AsusdClient: failed to set fan curve:" << error;
+            emit errorOccurred(tr("Failed to set fan curve: %1").arg(error));
+            return;
+        }
+        setFanCurvesEnabled(profile, enabled);
+    });
+    connect(process, &QProcess::errorOccurred, this, [this, process](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) {
+            emit errorOccurred(tr("asusctl not found"));
+            process->deleteLater();
+        }
+    });
     process->start("asusctl", args);
 }
 
-void AsusdClient::resetFanCurves(quint32 profile)
+void AsusdClient::setFanCurvesEnabled(int profile, bool enabled)
 {
-    if (!m_connected) return;
+    callFanCurves("SetFanCurvesEnabled",
+                  {QVariant::fromValue(profileToDbus(profile)), QVariant::fromValue(enabled)},
+                  [this, profile](const QDBusMessage &) { fetchFanCurves(profile); },
+                  tr("Failed to enable fan curves"));
+}
 
-    qDebug() << "Resetting fan curves for profile" << profile;
-    emit fanCurvesChanged();
+void AsusdClient::resetFanCurves(int profile)
+{
+    // Restore the factory curves and hand fan control back to the firmware
+    callFanCurves("SetCurvesToDefaults", {QVariant::fromValue(profileToDbus(profile))},
+                  [this, profile](const QDBusMessage &) { setFanCurvesEnabled(profile, false); },
+                  tr("Failed to reset fan curves"));
 }

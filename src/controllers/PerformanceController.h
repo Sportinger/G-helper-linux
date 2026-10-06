@@ -39,7 +39,7 @@ signals:
     void errorOccurred(const QString &error);
 
 private slots:
-    void onProfileChanged(quint32 profile);
+    void onProfileChanged(int profile);
     void onClientConnected(bool connected);
 
 private:

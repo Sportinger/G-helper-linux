@@ -1,5 +1,6 @@
 #include "BatteryController.h"
 #include "AsusdClient.h"
+#include "PowerSupply.h"
 #include <QFile>
 #include <QTextStream>
 #include <QDir>
@@ -25,8 +26,8 @@ BatteryController::BatteryController(AsusdClient *client, QObject *parent)
         m_chargeLimit = m_client->chargeLimit();
     }
 
-    // Check if battery exists
-    if (QDir(BATTERY_PATH).exists()) {
+    m_batteryPath = PowerSupply::batteryPath();
+    if (!m_batteryPath.isEmpty()) {
         m_updateTimer->start();
         updateBatteryStatus();
     }
@@ -86,101 +87,80 @@ void BatteryController::updateBatteryStatus()
 
 void BatteryController::readBatteryInfo()
 {
-    // Read current charge
-    QFile capacityFile(QString("%1/capacity").arg(BATTERY_PATH));
-    if (capacityFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QTextStream in(&capacityFile);
-        int charge = in.readLine().toInt();
+    const QString bat = m_batteryPath;
+
+    const double capacity = PowerSupply::readNumber(bat, "capacity");
+    if (capacity >= 0) {
+        const int charge = static_cast<int>(capacity);
         if (m_currentCharge != charge) {
             m_currentCharge = charge;
             emit currentChargeChanged(charge);
         }
-        capacityFile.close();
     }
 
-    // Read charging status
-    QFile statusFile(QString("%1/status").arg(BATTERY_PATH));
-    if (statusFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QTextStream in(&statusFile);
-        QString status = in.readLine().trimmed();
-        bool charging = (status == "Charging");
-        bool pluggedIn = (status == "Charging" || status == "Not charging" || status == "Full");
-
-        if (m_isCharging != charging) {
-            m_isCharging = charging;
-            emit isChargingChanged(charging);
-        }
-        if (m_isPluggedIn != pluggedIn) {
-            m_isPluggedIn = pluggedIn;
-            emit isPluggedInChanged(pluggedIn);
-        }
-        statusFile.close();
+    const QString status = PowerSupply::readAttribute(bat, "status");
+    const bool charging = (status == "Charging");
+    if (m_isCharging != charging) {
+        m_isCharging = charging;
+        emit isChargingChanged(charging);
     }
 
-    // Try to read AC status directly
-    QFile acOnlineFile(QString("%1/online").arg(AC_PATH));
-    if (acOnlineFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QTextStream in(&acOnlineFile);
-        bool online = (in.readLine().trimmed() == "1");
-        if (m_isPluggedIn != online) {
-            m_isPluggedIn = online;
-            emit isPluggedInChanged(online);
-        }
-        acOnlineFile.close();
+    const bool pluggedIn = PowerSupply::isOnAc();
+    if (m_isPluggedIn != pluggedIn) {
+        m_isPluggedIn = pluggedIn;
+        emit isPluggedInChanged(pluggedIn);
     }
 
-    // Read power draw (current_now * voltage_now / 1000000 for watts)
-    QFile currentFile(QString("%1/current_now").arg(BATTERY_PATH));
-    QFile voltageFile(QString("%1/voltage_now").arg(BATTERY_PATH));
-    if (currentFile.open(QIODevice::ReadOnly | QIODevice::Text) &&
-        voltageFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QTextStream currentIn(&currentFile);
-        QTextStream voltageIn(&voltageFile);
-        double current = currentIn.readLine().toDouble() / 1000000.0; // uA to A
-        double voltage = voltageIn.readLine().toDouble() / 1000000.0; // uV to V
-        double power = current * voltage;
-        if (qAbs(m_powerDraw - power) > 0.1) {
-            m_powerDraw = power;
-            emit powerDrawChanged(power);
-        }
-        currentFile.close();
-        voltageFile.close();
+    // Batteries report either energy (uWh/uW) or charge (uAh/uA) values.
+    // Ratios are the same in both cases, so the time calculation works for both.
+    double now = PowerSupply::readNumber(bat, "energy_now");
+    double full = PowerSupply::readNumber(bat, "energy_full");
+    double rate = PowerSupply::readNumber(bat, "power_now");
+    double powerWatts = rate / 1e6;
+    if (now < 0 || full < 0 || rate < 0) {
+        now = PowerSupply::readNumber(bat, "charge_now");
+        full = PowerSupply::readNumber(bat, "charge_full");
+        rate = PowerSupply::readNumber(bat, "current_now");
+        const double voltage = PowerSupply::readNumber(bat, "voltage_now");
+        powerWatts = (rate >= 0 && voltage >= 0) ? (rate / 1e6) * (voltage / 1e6) : 0.0;
+    }
+    rate = qAbs(rate);
+    powerWatts = qAbs(powerWatts);
+
+    if (qAbs(m_powerDraw - powerWatts) > 0.1) {
+        m_powerDraw = powerWatts;
+        emit powerDrawChanged(powerWatts);
     }
 
-    // Calculate time remaining
-    QFile energyNowFile(QString("%1/energy_now").arg(BATTERY_PATH));
-    QFile energyFullFile(QString("%1/energy_full").arg(BATTERY_PATH));
-    QFile powerNowFile(QString("%1/power_now").arg(BATTERY_PATH));
-
-    if (powerNowFile.open(QIODevice::ReadOnly | QIODevice::Text) &&
-        energyNowFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QTextStream energyIn(&energyNowFile);
-        QTextStream powerIn(&powerNowFile);
-        double energyNow = energyIn.readLine().toDouble() / 1000000.0; // uWh to Wh
-        double powerNow = powerIn.readLine().toDouble() / 1000000.0;   // uW to W
-
-        QString timeStr;
-        if (powerNow > 0.1) {
-            double hours = energyNow / powerNow;
-            int h = static_cast<int>(hours);
-            int m = static_cast<int>((hours - h) * 60);
-            if (m_isCharging) {
-                timeStr = tr("%1h %2m until full").arg(h).arg(m);
-            } else {
-                timeStr = tr("%1h %2m remaining").arg(h).arg(m);
-            }
-            m_powerDraw = powerNow;
-            emit powerDrawChanged(powerNow);
-        } else {
-            timeStr = m_isPluggedIn ? tr("Fully charged") : tr("Calculating...");
+    QString timeStr;
+    if (now >= 0 && full > 0 && rate > 0 && powerWatts > 0.1) {
+        double hours = -1;
+        if (charging) {
+            // Charging stops at the charge limit, not at 100 %
+            const double target = full * qBound(20, m_chargeLimit, 100) / 100.0;
+            if (target > now)
+                hours = (target - now) / rate;
+        } else if (status == "Discharging") {
+            hours = now / rate;
         }
 
-        if (m_timeRemaining != timeStr) {
-            m_timeRemaining = timeStr;
-            emit timeRemainingChanged(timeStr);
+        if (hours >= 0) {
+            const int totalMinutes = static_cast<int>(hours * 60);
+            const int h = totalMinutes / 60;
+            const int m = totalMinutes % 60;
+            timeStr = charging ? tr("%1h %2m until full").arg(h).arg(m)
+                               : tr("%1h %2m remaining").arg(h).arg(m);
         }
+    }
+    if (timeStr.isEmpty()) {
+        if (status == "Full" || status == "Not charging")
+            timeStr = tr("Fully charged");
+        else if (!pluggedIn)
+            timeStr = tr("Calculating...");
+    }
 
-        energyNowFile.close();
-        powerNowFile.close();
+    if (m_timeRemaining != timeStr) {
+        m_timeRemaining = timeStr;
+        emit timeRemainingChanged(timeStr);
     }
 }

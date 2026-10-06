@@ -100,11 +100,7 @@ Window {
                             verticalAlignment: Text.AlignVCenter
                         }
 
-                        onClicked: {
-                            FanController.setCurrentProfile(index)
-                            cpuCanvas.reloadFromExternal()
-                            gpuCanvas.reloadFromExternal()
-                        }
+                        onClicked: FanController.setCurrentProfile(index)
                     }
                 }
             }
@@ -127,9 +123,37 @@ Window {
         anchors.margins: Theme.spacingMedium
         spacing: Theme.spacingSmall
 
+        Text {
+            Layout.fillWidth: true
+            visible: !FanController.available
+            text: qsTr("Fan curves are not available (asusd not running or not supported by this laptop).")
+            wrapMode: Text.WordWrap
+            font.pixelSize: Theme.fontSizeSmall
+            color: Theme.warning
+        }
+
+        // Custom curves on/off for the selected profile
+        RowLayout {
+            Layout.fillWidth: true
+            visible: FanController.available
+
+            Text {
+                text: FanController.curvesEnabled ? qsTr("Custom fan curves active")
+                                                  : qsTr("Firmware fan control (editing a curve enables it)")
+                font.pixelSize: Theme.fontSizeSmall
+                color: Theme.textSecondary
+            }
+            Item { Layout.fillWidth: true }
+            Switch {
+                checked: FanController.curvesEnabled
+                onToggled: FanController.setCurvesEnabled(checked)
+            }
+        }
+
         // CPU Fan section
         RowLayout {
             Layout.fillWidth: true
+            visible: cpuCanvas.visible
             Text {
                 text: qsTr("CPU Fan")
                 font.pixelSize: Theme.fontSizeMedium
@@ -141,21 +165,24 @@ Window {
 
         FanCurveCanvas {
             id: cpuCanvas
+            visible: FanController.cpuCurve.length > 0
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.preferredHeight: 250
             curveData: FanController.cpuCurve
             curveColor: root.profileColor(root.selectedProfile)
+            curveActive: FanController.cpuCurveEnabled
             label: "CPU"
 
             onCurveChanged: function(newCurve) {
-                FanController.setCpuCurve(newCurve, FanController.cpuCurveEnabled)
+                FanController.setCpuCurve(newCurve)
             }
         }
 
         // GPU Fan section
         RowLayout {
             Layout.fillWidth: true
+            visible: gpuCanvas.visible
             Text {
                 text: qsTr("GPU Fan")
                 font.pixelSize: Theme.fontSizeMedium
@@ -167,15 +194,17 @@ Window {
 
         FanCurveCanvas {
             id: gpuCanvas
+            visible: FanController.gpuCurve.length > 0
             Layout.fillWidth: true
             Layout.fillHeight: true
             Layout.preferredHeight: 250
             curveData: FanController.gpuCurve
             curveColor: root.profileColor(root.selectedProfile)
+            curveActive: FanController.gpuCurveEnabled
             label: "GPU"
 
             onCurveChanged: function(newCurve) {
-                FanController.setGpuCurve(newCurve, FanController.gpuCurveEnabled)
+                FanController.setGpuCurve(newCurve)
             }
         }
 
@@ -186,11 +215,11 @@ Window {
 
             Button {
                 text: qsTr("Reset Profile")
-                onClicked: {
-                    FanController.resetCurrentProfileToDefaults()
-                    cpuCanvas.reloadFromExternal()
-                    gpuCanvas.reloadFromExternal()
-                }
+                enabled: FanController.available
+                ToolTip.visible: hovered
+                ToolTip.delay: 500
+                ToolTip.text: qsTr("Restore factory curves and return to firmware fan control")
+                onClicked: FanController.resetCurrentProfileToDefaults()
 
                 background: Rectangle {
                     implicitHeight: 32
@@ -224,42 +253,52 @@ Window {
 
         property var curveData: []
         property color curveColor: Theme.accent
+        property bool curveActive: true
         property int dragIndex: -1
         property string label: ""
 
-        // Internal curve data - completely local
+        // Local copy that is edited while dragging
         property var internalCurve: []
-        property bool initialized: false
+
+        // Temperature axis: at least 50..100 °C, extended downwards if the
+        // hardware curve starts lower (firmware curves often start at 30 °C)
+        readonly property int padding: 35
+        property int minTemp: 50
+        readonly property int maxTemp: 100
 
         signal curveChanged(var newCurve)
 
+        // Always follow the data from asusd, except while the user drags
         onCurveDataChanged: {
-            if (!initialized || internalCurve.length === 0) {
+            if (dragIndex < 0)
                 initFromExternal()
-            }
         }
+        onCurveActiveChanged: requestPaint()
+        onWidthChanged: requestPaint()
+        onHeightChanged: requestPaint()
 
-        Component.onCompleted: {
-            initFromExternal()
-        }
+        Component.onCompleted: initFromExternal()
 
         function initFromExternal() {
-            internalCurve = []
-            if (curveData && curveData.length > 0) {
+            var curve = []
+            var lowest = 50
+            if (curveData) {
                 for (var i = 0; i < curveData.length; i++) {
-                    internalCurve.push({
-                        temp: curveData[i].temp,
-                        fan: curveData[i].fan
-                    })
+                    curve.push({ temp: curveData[i].temp, fan: curveData[i].fan })
+                    lowest = Math.min(lowest, curveData[i].temp)
                 }
-                initialized = true
             }
+            minTemp = Math.max(0, Math.floor(lowest / 10) * 10)
+            internalCurve = curve
             requestPaint()
         }
 
-        function reloadFromExternal() {
-            initialized = false
-            initFromExternal()
+        function tempToX(temp) {
+            return padding + (temp - minTemp) / (maxTemp - minTemp) * (width - padding * 2)
+        }
+
+        function fanToY(fan) {
+            return height - padding - (fan / 100) * (height - padding * 2)
         }
 
         MouseArea {
@@ -269,17 +308,28 @@ Window {
             preventStealing: true
 
             onPressed: function(mouse) {
-                var idx = canvas.findNearestPoint(mouse.x, mouse.y)
-                canvas.dragIndex = idx
+                canvas.dragIndex = canvas.findNearestPoint(mouse.x, mouse.y)
+                canvas.requestPaint()
             }
 
             onPositionChanged: function(mouse) {
-                if (pressed && canvas.dragIndex >= 0 && canvas.internalCurve.length > 0) {
-                    var coords = canvas.screenToData(mouse.x, mouse.y)
-                    canvas.internalCurve[canvas.dragIndex].temp = coords.temp
-                    canvas.internalCurve[canvas.dragIndex].fan = coords.fan
-                    canvas.requestPaint()
-                }
+                var i = canvas.dragIndex
+                var curve = canvas.internalCurve
+                if (!pressed || i < 0 || curve.length === 0)
+                    return
+
+                var coords = canvas.screenToData(mouse.x, mouse.y)
+
+                // asusd rejects curves where temperature or fan speed goes
+                // down, so keep each point between its neighbours
+                var minT = i > 0 ? curve[i - 1].temp : canvas.minTemp
+                var maxT = i < curve.length - 1 ? curve[i + 1].temp : canvas.maxTemp
+                var minF = i > 0 ? curve[i - 1].fan : 0
+                var maxF = i < curve.length - 1 ? curve[i + 1].fan : 100
+
+                curve[i].temp = Math.max(minT, Math.min(maxT, coords.temp))
+                curve[i].fan = Math.max(minF, Math.min(maxF, coords.fan))
+                canvas.requestPaint()
             }
 
             onReleased: function(mouse) {
@@ -291,39 +341,39 @@ Window {
                             fan: canvas.internalCurve[i].fan
                         })
                     }
+                    canvas.dragIndex = -1
                     canvas.curveChanged(curveCopy)
                 }
                 canvas.dragIndex = -1
+                canvas.requestPaint()
             }
         }
 
         function findNearestPoint(mx, my) {
-            var padding = 35
-            var w = width - padding * 2
-            var h = height - padding * 2
-
             if (!internalCurve || internalCurve.length === 0) return -1
 
+            var best = -1
+            var bestDist = 14
             for (var i = 0; i < internalCurve.length; i++) {
-                var point = internalCurve[i]
-                var x = padding + (point.temp - 50) / 50 * w
-                var y = height - padding - (point.fan / 100) * h
-
+                var x = tempToX(internalCurve[i].temp)
+                var y = fanToY(internalCurve[i].fan)
                 var dist = Math.sqrt(Math.pow(mx - x, 2) + Math.pow(my - y, 2))
-                if (dist < 12) return i
+                if (dist < bestDist) {
+                    best = i
+                    bestDist = dist
+                }
             }
-            return -1
+            return best
         }
 
         function screenToData(mx, my) {
-            var padding = 35
             var w = width - padding * 2
             var h = height - padding * 2
 
-            var temp = Math.round(50 + (mx - padding) / w * 50)
+            var temp = Math.round(minTemp + (mx - padding) / w * (maxTemp - minTemp))
             var fan = Math.round(100 - (my - padding) / h * 100)
 
-            temp = Math.max(50, Math.min(100, temp))
+            temp = Math.max(minTemp, Math.min(maxTemp, temp))
             fan = Math.max(0, Math.min(100, fan))
 
             return { temp: temp, fan: fan }
@@ -333,7 +383,6 @@ Window {
             var ctx = getContext("2d")
             ctx.reset()
 
-            var padding = 35
             var w = width - padding * 2
             var h = height - padding * 2
 
@@ -359,9 +408,10 @@ Window {
                 ctx.fillText((100 - i * 20) + "%", padding - 4, y + 3)
             }
 
-            // Vertical grid lines (temp) - 50 to 100
-            for (var j = 0; j <= 5; j++) {
-                var x = padding + w * j / 5
+            // Vertical grid lines (temperature, every 10 °C)
+            var steps = (maxTemp - minTemp) / 10
+            for (var j = 0; j <= steps; j++) {
+                var x = padding + w * j / steps
                 ctx.beginPath()
                 ctx.moveTo(x, padding)
                 ctx.lineTo(x, padding + h)
@@ -369,36 +419,31 @@ Window {
 
                 ctx.fillStyle = Theme.textSecondary
                 ctx.textAlign = "center"
-                ctx.fillText((50 + j * 10) + "°", x, height - padding + 12)
+                ctx.fillText((minTemp + j * 10) + "°", x, height - padding + 12)
             }
 
-            // Use internalCurve for drawing
             if (!internalCurve || internalCurve.length === 0) return
             var drawCurve = internalCurve
 
-            // Draw curve
+            // Draw curve (dimmed when the firmware curve is in control)
+            ctx.globalAlpha = curveActive ? 1.0 : 0.45
             ctx.strokeStyle = curveColor
             ctx.lineWidth = 2
             ctx.beginPath()
-
             for (var k = 0; k < drawCurve.length; k++) {
-                var point = drawCurve[k]
-                var px = padding + (point.temp - 50) / 50 * w
-                var py = padding + h - (point.fan / 100) * h
-
-                if (k === 0) {
+                var px = tempToX(drawCurve[k].temp)
+                var py = fanToY(drawCurve[k].fan)
+                if (k === 0)
                     ctx.moveTo(px, py)
-                } else {
+                else
                     ctx.lineTo(px, py)
-                }
             }
             ctx.stroke()
 
             // Draw points
             for (var m = 0; m < drawCurve.length; m++) {
-                var pt = drawCurve[m]
-                var ptx = padding + (pt.temp - 50) / 50 * w
-                var pty = padding + h - (pt.fan / 100) * h
+                var ptx = tempToX(drawCurve[m].temp)
+                var pty = fanToY(drawCurve[m].fan)
 
                 ctx.beginPath()
                 ctx.arc(ptx, pty, dragIndex === m ? 7 : 5, 0, Math.PI * 2)
@@ -407,7 +452,14 @@ Window {
                 ctx.strokeStyle = Theme.textPrimary
                 ctx.lineWidth = 1.5
                 ctx.stroke()
+
+                if (dragIndex === m) {
+                    ctx.fillStyle = Theme.textPrimary
+                    ctx.textAlign = "center"
+                    ctx.fillText(drawCurve[m].temp + "° / " + drawCurve[m].fan + "%", ptx, pty - 12)
+                }
             }
+            ctx.globalAlpha = 1.0
         }
     }
 }

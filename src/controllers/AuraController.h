@@ -4,9 +4,11 @@
 #include <QObject>
 #include <QColor>
 #include <QVariantList>
+#include "DBusTypes.h"
 
 class AsusdClient;
 
+// Keyboard backlight (Aura). Mode numbers are the asusd AuraModeNum values.
 class AuraController : public QObject
 {
     Q_OBJECT
@@ -15,24 +17,23 @@ class AuraController : public QObject
     Q_PROPERTY(QColor color1 READ color1 NOTIFY colorsChanged)
     Q_PROPERTY(QColor color2 READ color2 NOTIFY colorsChanged)
     Q_PROPERTY(int speed READ speed NOTIFY speedChanged)
-    Q_PROPERTY(QVariantList availableModes READ availableModes CONSTANT)
+    Q_PROPERTY(QVariantList availableModes READ availableModes NOTIFY availableModesChanged)
     Q_PROPERTY(bool available READ isAvailable NOTIFY availableChanged)
 
 public:
     enum Mode {
-        Static = 0,
-        Breathe = 1,
-        Strobe = 2,
-        Rainbow = 3,
-        Star = 4,
-        Rain = 5,
-        Highlight = 6,
-        Laser = 7,
-        Ripple = 8,
-        Pulse = 9,
-        Comet = 10,
-        Flash = 11,
-        Off = 255
+        Static = AsusdAuraMode::Static,
+        Breathe = AsusdAuraMode::Breathe,
+        RainbowCycle = AsusdAuraMode::RainbowCycle,
+        RainbowWave = AsusdAuraMode::RainbowWave,
+        Star = AsusdAuraMode::Star,
+        Rain = AsusdAuraMode::Rain,
+        Highlight = AsusdAuraMode::Highlight,
+        Laser = AsusdAuraMode::Laser,
+        Ripple = AsusdAuraMode::Ripple,
+        Pulse = AsusdAuraMode::Pulse,
+        Comet = AsusdAuraMode::Comet,
+        Flash = AsusdAuraMode::Flash
     };
     Q_ENUM(Mode)
 
@@ -55,6 +56,7 @@ public:
     QVariantList availableModes() const { return m_availableModes; }
     bool isAvailable() const { return m_available; }
 
+    // All setters apply the effect to the keyboard immediately
     Q_INVOKABLE void setBrightness(int level);
     Q_INVOKABLE void setMode(int mode);
     Q_INVOKABLE void setColor1(const QColor &color);
@@ -73,23 +75,25 @@ signals:
     void currentModeChanged(int mode);
     void colorsChanged();
     void speedChanged(int speed);
+    void availableModesChanged();
     void availableChanged(bool available);
     void errorOccurred(const QString &error);
 
 private slots:
     void onBrightnessChanged(quint32 brightness);
     void onClientConnected(bool connected);
+    void onModeDataChanged();
+    void updateAvailableModes();
 
 private:
-    void initAvailableModes();
-    void fetchCurrentState();
+    void updateAvailability();
 
     AsusdClient *m_client;
 
     int m_brightness = BrightnessMedium;
     int m_currentMode = Static;
-    QColor m_color1 = QColor(0, 160, 224); // Cyan accent
-    QColor m_color2 = QColor(255, 255, 255);
+    QColor m_color1 = QColor(255, 0, 0);
+    QColor m_color2 = QColor(0, 0, 0);
     int m_speed = 1;
     QVariantList m_availableModes;
     bool m_available = false;

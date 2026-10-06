@@ -30,6 +30,8 @@ signals:
     void visibleChanged(bool visible);
     void showWindowRequested();
     void quitRequested();
+    // GPU switches go through the UI so it can ask for confirmation first
+    void gpuModeRequested(int mode);
 
 private slots:
     void onActivated(QSystemTrayIcon::ActivationReason reason);
@@ -45,6 +47,8 @@ private slots:
     void setEcoMode();
     void setStandardMode();
     void setUltimateMode();
+    void setOptimizedMode();
+    void updateGpuActions();
 
 private:
     void createTrayIcon();
@@ -66,6 +70,7 @@ private:
     QAction *m_ecoAction;
     QAction *m_standardAction;
     QAction *m_ultimateAction;
+    QAction *m_optimizedAction;
 
     // Other actions
     QAction *m_showAction;

@@ -60,9 +60,7 @@ private:
     QString m_timeRemaining;
     double m_powerDraw = 0.0;
     bool m_available = false;
-
-    static constexpr const char* BATTERY_PATH = "/sys/class/power_supply/BAT1";
-    static constexpr const char* AC_PATH = "/sys/class/power_supply/ACAD";
+    QString m_batteryPath;
 };
 
 #endif // BATTERYCONTROLLER_H

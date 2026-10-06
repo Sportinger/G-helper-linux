@@ -2,9 +2,12 @@
 #define SLASHCONTROLLER_H
 
 #include <QObject>
-#include <QProcess>
 #include <QStringList>
 
+class AsusdClient;
+
+// Slash lightbar (ROG Zephyrus G14/G16 2024+). Only available when asusd
+// exposes the /xyz/ljones/aura/slash object.
 class SlashController : public QObject
 {
     Q_OBJECT
@@ -15,7 +18,7 @@ class SlashController : public QObject
     Q_PROPERTY(bool available READ isAvailable NOTIFY availableChanged)
 
 public:
-    explicit SlashController(QObject *parent = nullptr);
+    explicit SlashController(AsusdClient *client, QObject *parent = nullptr);
     ~SlashController() override;
 
     bool isEnabled() const { return m_enabled; }
@@ -27,6 +30,7 @@ public:
     Q_INVOKABLE void setEnabled(bool enabled);
     Q_INVOKABLE void setBrightness(int brightness);
     Q_INVOKABLE void setMode(const QString &mode);
+    Q_INVOKABLE void refresh();
 
 signals:
     void enabledChanged(bool enabled);
@@ -35,11 +39,15 @@ signals:
     void availableChanged(bool available);
     void errorOccurred(const QString &error);
 
-private:
-    void runAsusctl(const QStringList &args);
-    void checkAvailability();
-    void fetchCurrentState();
+private slots:
+    void onClientConnected(bool connected);
 
+private:
+    void readModeFromConfig();
+
+    static constexpr const char* INTERFACE_SLASH = "xyz.ljones.Slash";
+
+    AsusdClient *m_client;
     bool m_enabled = true;
     int m_brightness = 128;
     QString m_currentMode = "Static";

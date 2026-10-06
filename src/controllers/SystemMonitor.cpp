@@ -4,6 +4,8 @@
 #include <QDir>
 #include <QDebug>
 #include <QProcess>
+#include "PowerSupply.h"
+#include <QDateTime>
 
 SystemMonitor::SystemMonitor(QObject *parent)
     : QObject(parent)
@@ -40,69 +42,51 @@ void SystemMonitor::setUpdateInterval(int msec)
 
 void SystemMonitor::findHwmonPaths()
 {
+    // Prefer the first sensor (temp1_input / fan1_input). Note that a plain
+    // alphabetical sort would put temp10_input before temp1_input.
+    auto firstSensor = [](const QDir &dir, const QString &prefix) -> QString {
+        if (dir.exists(prefix + "1_input"))
+            return dir.filePath(prefix + "1_input");
+        const QStringList files = dir.entryList(QStringList() << prefix + "*_input", QDir::Files);
+        return files.isEmpty() ? QString() : dir.filePath(files.first());
+    };
+
     QDir hwmonDir("/sys/class/hwmon");
-    QStringList hwmonDevices = hwmonDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    const QStringList hwmonDevices = hwmonDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::System, QDir::Name);
 
     for (const QString &device : hwmonDevices) {
-        QString basePath = "/sys/class/hwmon/" + device;
-        QString namePath = basePath + "/name";
+        const QString basePath = "/sys/class/hwmon/" + device;
+        const QDir deviceDir(basePath);
+        const QString name = PowerSupply::readAttribute(basePath, "name");
 
-        QFile nameFile(namePath);
-        if (nameFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QTextStream in(&nameFile);
-            QString name = in.readLine().trimmed();
-            nameFile.close();
+        // CPU temperature (k10temp for AMD, coretemp for Intel)
+        if ((name == "k10temp" || name == "coretemp") && m_cpuTempPath.isEmpty()) {
+            m_cpuTempPath = firstSensor(deviceDir, "temp");
+            qDebug() << "Found CPU temp at:" << m_cpuTempPath;
+        }
 
-            // CPU temperature (k10temp for AMD, coretemp for Intel)
-            if (name == "k10temp" || name == "coretemp") {
-                // Find temp input file
-                QDir deviceDir(basePath);
-                QStringList tempFiles = deviceDir.entryList(QStringList() << "temp*_input", QDir::Files);
-                if (!tempFiles.isEmpty()) {
-                    m_cpuTempPath = basePath + "/" + tempFiles.first();
-                    qDebug() << "Found CPU temp at:" << m_cpuTempPath;
-                }
+        // iGPU temperature and APU power (amdgpu)
+        if (name == "amdgpu" && m_gpuTempPath.isEmpty()) {
+            m_gpuTempPath = firstSensor(deviceDir, "temp");
+            qDebug() << "Found GPU temp at:" << m_gpuTempPath;
+
+            if (deviceDir.exists("power1_input"))
+                m_apuPowerPath = basePath + "/power1_input";
+            else if (deviceDir.exists("power1_average"))
+                m_apuPowerPath = basePath + "/power1_average";
+            if (!m_apuPowerPath.isEmpty())
+                qDebug() << "Found APU power at:" << m_apuPowerPath;
+        }
+
+        // ASUS WMI fan speeds: fan1 = CPU, fan2 = GPU
+        if (name == "asus" || name == "asus-nb-wmi" || name == "asus_fan") {
+            if (m_cpuFanPath.isEmpty() && deviceDir.exists("fan1_input")) {
+                m_cpuFanPath = basePath + "/fan1_input";
+                qDebug() << "Found CPU fan at:" << m_cpuFanPath;
             }
-
-            // GPU temperature and power (amdgpu for AMD, nvidia for NVIDIA)
-            if (name == "amdgpu" || name == "nvidia") {
-                QDir deviceDir(basePath);
-                QStringList tempFiles = deviceDir.entryList(QStringList() << "temp*_input", QDir::Files);
-                if (!tempFiles.isEmpty()) {
-                    m_gpuTempPath = basePath + "/" + tempFiles.first();
-                    qDebug() << "Found GPU temp at:" << m_gpuTempPath;
-                }
-                // APU/GPU power
-                if (deviceDir.exists("power1_input")) {
-                    m_apuPowerPath = basePath + "/power1_input";
-                    qDebug() << "Found APU power at:" << m_apuPowerPath;
-                } else if (deviceDir.exists("power1_average")) {
-                    m_apuPowerPath = basePath + "/power1_average";
-                    qDebug() << "Found APU power (average) at:" << m_apuPowerPath;
-                }
-            }
-
-            // ASUS WMI for fan speeds
-            if (name == "asus-nb-wmi" || name == "asus_fan" || name == "asus") {
-                QDir deviceDir(basePath);
-
-                // Look for fan inputs
-                QStringList fanFiles = deviceDir.entryList(QStringList() << "fan*_input", QDir::Files);
-                for (const QString &fanFile : fanFiles) {
-                    QString fanPath = basePath + "/" + fanFile;
-                    if (fanFile.contains("1")) {
-                        m_cpuFanPath = fanPath;
-                        qDebug() << "Found CPU fan at:" << m_cpuFanPath;
-                    } else if (fanFile.contains("2")) {
-                        m_gpuFanPath = fanPath;
-                        qDebug() << "Found GPU fan at:" << m_gpuFanPath;
-                    }
-                }
-
-                // Alternative naming
-                if (m_cpuFanPath.isEmpty() && deviceDir.exists("pwm1")) {
-                    m_cpuFanPath = basePath + "/pwm1";
-                }
+            if (m_gpuFanPath.isEmpty() && deviceDir.exists("fan2_input")) {
+                m_gpuFanPath = basePath + "/fan2_input";
+                qDebug() << "Found GPU fan at:" << m_gpuFanPath;
             }
         }
     }
@@ -110,21 +94,46 @@ void SystemMonitor::findHwmonPaths()
     m_available = !m_cpuTempPath.isEmpty() || !m_gpuTempPath.isEmpty();
     emit availableChanged(m_available);
 
-    // Find backlight device
+    // iGPU load: only amdgpu exposes gpu_busy_percent. Card numbering
+    // differs between kernels, so search instead of assuming card0.
+    QDir drmDir("/sys/class/drm");
+    const QStringList cards = drmDir.entryList(QStringList() << "card*", QDir::Dirs | QDir::System, QDir::Name);
+    for (const QString &card : cards) {
+        if (card.contains('-'))
+            continue;   // connectors like card1-eDP-1
+        const QString busyPath = "/sys/class/drm/" + card + "/device/gpu_busy_percent";
+        if (QFile::exists(busyPath)) {
+            m_gpuBusyPath = busyPath;
+            qDebug() << "Found GPU load at:" << m_gpuBusyPath;
+            break;
+        }
+    }
+
+    // NVIDIA dGPU on the PCI bus (vendor 0x10de, display class 0x03xxxx)
+    QDir pciDir("/sys/bus/pci/devices");
+    const QStringList pciDevices = pciDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::System, QDir::Name);
+    for (const QString &device : pciDevices) {
+        const QString path = "/sys/bus/pci/devices/" + device;
+        if (PowerSupply::readAttribute(path, "vendor") == "0x10de"
+            && PowerSupply::readAttribute(path, "class").startsWith("0x03")) {
+            m_dgpuPciPath = path;
+            qDebug() << "Found NVIDIA dGPU at:" << m_dgpuPciPath;
+            break;
+        }
+    }
+
+    // Find backlight device, preferring the iGPU one
     QDir backlightDir("/sys/class/backlight");
-    QStringList backlightDevices = backlightDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    const QStringList backlightDevices = backlightDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::System, QDir::Name);
     for (const QString &device : backlightDevices) {
-        QString basePath = "/sys/class/backlight/" + device;
-        // Prefer amdgpu backlight over nvidia
-        if (device.startsWith("amdgpu") || m_backlightPath.isEmpty()) {
+        if (!device.startsWith("amdgpu") && !device.startsWith("intel") && !m_backlightPath.isEmpty())
+            continue;
+        const QString basePath = "/sys/class/backlight/" + device;
+        const int maxBrightness = static_cast<int>(PowerSupply::readNumber(basePath, "max_brightness", 0));
+        if (maxBrightness > 0) {
             m_backlightPath = basePath;
-            QFile maxFile(basePath + "/max_brightness");
-            if (maxFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                QTextStream in(&maxFile);
-                m_maxBrightness = in.readLine().toInt();
-                maxFile.close();
-                qDebug() << "Found backlight at:" << m_backlightPath << "max:" << m_maxBrightness;
-            }
+            m_maxBrightness = maxBrightness;
+            qDebug() << "Found backlight at:" << m_backlightPath << "max:" << m_maxBrightness;
         }
     }
 }
@@ -220,8 +229,11 @@ void SystemMonitor::readCpuUsage()
                 qint64 system = parts[3].toLongLong();
                 qint64 idle = parts[4].toLongLong();
                 qint64 iowait = parts.size() > 5 ? parts[5].toLongLong() : 0;
+                qint64 irq = parts.size() > 6 ? parts[6].toLongLong() : 0;
+                qint64 softirq = parts.size() > 7 ? parts[7].toLongLong() : 0;
+                qint64 steal = parts.size() > 8 ? parts[8].toLongLong() : 0;
 
-                qint64 totalTime = user + nice + system + idle + iowait;
+                qint64 totalTime = user + nice + system + idle + iowait + irq + softirq + steal;
                 qint64 idleTime = idle + iowait;
 
                 if (m_prevTotalTime > 0) {
@@ -246,52 +258,109 @@ void SystemMonitor::readCpuUsage()
 
 void SystemMonitor::readGpuUsage()
 {
-    // Try AMD GPU usage
-    QFile amdFile("/sys/class/drm/card0/device/gpu_busy_percent");
-    if (amdFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QTextStream in(&amdFile);
-        double usage = in.readLine().toDouble();
+    if (m_gpuBusyPath.isEmpty())
+        return;
+
+    QFile file(m_gpuBusyPath);
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        const double usage = QString::fromUtf8(file.readLine()).trimmed().toDouble();
         if (qAbs(m_gpuUsage - usage) > 0.5) {
             m_gpuUsage = usage;
             emit gpuUsageChanged(usage);
         }
-        amdFile.close();
-        return;
     }
+}
 
-    // For iGPU (AMD), we use the sysfs path above
-    // dGPU (NVIDIA) is handled separately in readDgpuInfo()
+void SystemMonitor::resetDgpuStats()
+{
+    if (m_dgpuUsage != 0.0) {
+        m_dgpuUsage = 0.0;
+        emit dgpuUsageChanged(0.0);
+    }
+    if (m_dgpuTemp != 0) {
+        m_dgpuTemp = 0;
+        emit dgpuTempChanged(0);
+    }
 }
 
 void SystemMonitor::readDgpuInfo()
 {
-    // Read NVIDIA dGPU usage and temperature via nvidia-smi
-    QProcess process;
-    process.start("nvidia-smi", QStringList() << "--query-gpu=utilization.gpu,temperature.gpu"
-                                               << "--format=csv,noheader,nounits");
-    if (!process.waitForFinished(500)) {
-        // nvidia-smi not available or timeout
+    if (m_dgpuPciPath.isEmpty())
+        return;
+
+    // Runtime PM state straight from sysfs - reading it never wakes the GPU
+    const QString state = PowerSupply::readAttribute(m_dgpuPciPath + "/power", "runtime_status");
+    if (m_dgpuState != state) {
+        m_dgpuState = state;
+        emit dgpuStateChanged(state);
+    }
+
+    // Only ask nvidia-smi while the dGPU is awake *and* in use. Polling an
+    // idle dGPU (usage count 0) would keep it from suspending.
+    const double usageCount = PowerSupply::readNumber(m_dgpuPciPath + "/power", "runtime_usage", 1);
+    const bool queryable = (state == "active") && usageCount > 0;
+    if (!queryable) {
+        resetDgpuStats();
         return;
     }
 
-    QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
-    if (output.isEmpty()) return;
+    if (m_nvidiaSmiMissing || m_nvidiaSmi)
+        return;
+    if (QDateTime::currentMSecsSinceEpoch() < m_nvidiaSmiBackoffUntil)
+        return;
+    // nvidia-smi is comparatively expensive, every 3rd tick is enough
+    if (m_dgpuTick++ % 3 != 0)
+        return;
 
-    QStringList values = output.split(",");
-    if (values.size() >= 2) {
-        double usage = values[0].trimmed().toDouble();
-        int temp = values[1].trimmed().toInt();
+    m_nvidiaSmi = new QProcess(this);
+    QProcess *process = m_nvidiaSmi;
+
+    connect(process, &QProcess::finished, this, [this, process](int exitCode, QProcess::ExitStatus status) {
+        if (m_nvidiaSmi == process)
+            m_nvidiaSmi = nullptr;
+        process->deleteLater();
+
+        if (status != QProcess::NormalExit || exitCode != 0)
+            return;
+
+        const QString output = QString::fromUtf8(process->readAllStandardOutput()).trimmed();
+        const QStringList values = output.split(',');
+        if (values.size() < 2)
+            return;
+
+        const double usage = values[0].trimmed().toDouble();
+        const int temp = values[1].trimmed().toInt();
 
         if (qAbs(m_dgpuUsage - usage) > 0.5) {
             m_dgpuUsage = usage;
             emit dgpuUsageChanged(usage);
         }
-
         if (m_dgpuTemp != temp) {
             m_dgpuTemp = temp;
             emit dgpuTempChanged(temp);
         }
-    }
+    });
+    connect(process, &QProcess::errorOccurred, this, [this, process](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) {
+            // nvidia-smi is not installed; don't keep trying
+            m_nvidiaSmiMissing = true;
+            if (m_nvidiaSmi == process)
+                m_nvidiaSmi = nullptr;
+            process->deleteLater();
+        }
+    });
+
+    // A hanging nvidia-smi (driver busy) must not pile up: kill it and back off
+    QTimer::singleShot(3000, process, [this, process]() {
+        if (process->state() != QProcess::NotRunning) {
+            qWarning() << "SystemMonitor: nvidia-smi timed out, backing off";
+            m_nvidiaSmiBackoffUntil = QDateTime::currentMSecsSinceEpoch() + 30000;
+            process->kill();
+        }
+    });
+
+    process->start("nvidia-smi", QStringList() << "--query-gpu=utilization.gpu,temperature.gpu"
+                                               << "--format=csv,noheader,nounits");
 }
 
 void SystemMonitor::readMemoryInfo()
@@ -303,10 +372,13 @@ void SystemMonitor::readMemoryInfo()
 
         while (!in.atEnd()) {
             QString line = in.readLine();
-            if (line.startsWith("MemTotal:")) {
-                memTotal = line.split(' ', Qt::SkipEmptyParts)[1].toLongLong();
-            } else if (line.startsWith("MemAvailable:")) {
-                memAvailable = line.split(' ', Qt::SkipEmptyParts)[1].toLongLong();
+            const QStringList parts = line.split(' ', Qt::SkipEmptyParts);
+            if (parts.size() < 2)
+                continue;
+            if (parts[0] == "MemTotal:") {
+                memTotal = parts[1].toLongLong();
+            } else if (parts[0] == "MemAvailable:") {
+                memAvailable = parts[1].toLongLong();
             }
         }
         file.close();
@@ -368,60 +440,30 @@ void SystemMonitor::readDisplayBrightness()
 
 void SystemMonitor::readBatteryPower()
 {
-    // Check if on battery
-    QFile acFile(QString("%1/online").arg(AC_PATH));
-    if (acFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QTextStream in(&acFile);
-        bool pluggedIn = (in.readLine().trimmed() == "1");
-        acFile.close();
-
-        bool onBattery = !pluggedIn;
-        if (m_onBattery != onBattery) {
-            m_onBattery = onBattery;
-            emit onBatteryChanged(onBattery);
-        }
+    const bool onBattery = !PowerSupply::isOnAc();
+    if (m_onBattery != onBattery) {
+        m_onBattery = onBattery;
+        emit onBatteryChanged(onBattery);
     }
 
-    // Read battery discharge power
+    double power = 0.0;
     if (m_onBattery) {
-        // Try power_now first
-        QFile powerFile(QString("%1/power_now").arg(BATTERY_PATH));
-        if (powerFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QTextStream in(&powerFile);
-            double power = in.readLine().toDouble() / 1000000.0; // µW to W
-            powerFile.close();
-
-            if (qAbs(m_batteryPower - power) > 0.1) {
-                m_batteryPower = power;
-                emit batteryPowerChanged(power);
-            }
-            return;
+        const QString bat = PowerSupply::batteryPath();
+        const double powerNow = PowerSupply::readNumber(bat, "power_now");
+        if (powerNow >= 0) {
+            power = powerNow / 1e6;  // uW -> W
+        } else {
+            const double current = PowerSupply::readNumber(bat, "current_now");
+            const double voltage = PowerSupply::readNumber(bat, "voltage_now");
+            if (current >= 0 && voltage >= 0)
+                power = (current / 1e6) * (voltage / 1e6);  // uA * uV -> W
         }
+        power = qAbs(power);
+    }
 
-        // Fallback to current_now * voltage_now
-        QFile currentFile(QString("%1/current_now").arg(BATTERY_PATH));
-        QFile voltageFile(QString("%1/voltage_now").arg(BATTERY_PATH));
-        if (currentFile.open(QIODevice::ReadOnly | QIODevice::Text) &&
-            voltageFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QTextStream currentIn(&currentFile);
-            QTextStream voltageIn(&voltageFile);
-            double current = currentIn.readLine().toDouble() / 1000000.0; // µA to A
-            double voltage = voltageIn.readLine().toDouble() / 1000000.0; // µV to V
-            double power = current * voltage;
-            currentFile.close();
-            voltageFile.close();
-
-            if (qAbs(m_batteryPower - power) > 0.1) {
-                m_batteryPower = power;
-                emit batteryPowerChanged(power);
-            }
-        }
-    } else {
-        // On AC, battery power reading is not useful
-        if (m_batteryPower != 0.0) {
-            m_batteryPower = 0.0;
-            emit batteryPowerChanged(0.0);
-        }
+    if (qAbs(m_batteryPower - power) > 0.1) {
+        m_batteryPower = power;
+        emit batteryPowerChanged(power);
     }
 }
 
@@ -430,12 +472,12 @@ void SystemMonitor::calculateSystemPower()
     double systemPower = 0.0;
 
     if (m_onBattery && m_batteryPower > 0.1) {
-        // On battery: use battery discharge as base (includes everything except display)
-        // Add display power estimate
-        systemPower = m_batteryPower + m_displayPower;
+        // On battery the discharge rate is the real total system draw
+        // (display included).
+        systemPower = m_batteryPower;
     } else {
-        // On AC: estimate from components
-        // APU power (CPU + iGPU) + Display + Misc (SSD, WiFi, RAM, fans, etc.)
+        // On AC there is no measurement for the whole system, so estimate:
+        // APU (CPU + iGPU) + display + misc (SSD, WiFi, RAM, fans, ...)
         systemPower = m_apuPower + m_displayPower + MISC_POWER_ESTIMATE;
     }
 

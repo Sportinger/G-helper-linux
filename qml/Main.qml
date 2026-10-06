@@ -9,38 +9,74 @@ import "dialogs"
 
 ApplicationWindow {
     id: window
-    visible: true
+    // Shown from C++ (unless started minimized), which also positions it
+    visible: false
     width: 420
     height: 700
     minimumWidth: 400
     minimumHeight: 600
-    x: Screen.desktopAvailableWidth - width - 12
-    y: Screen.desktopAvailableHeight - height - 52
     title: qsTr("G-Helper Linux")
     color: Theme.background
-
-    function positionBottomRight() {
-        x = Screen.desktopAvailableWidth - width - 12
-        y = Screen.desktopAvailableHeight - height - 52
-    }
 
     onClosing: function(close) {
         if (Settings.minimizeToTray && TrayManager.visible) {
             close.accepted = false
             window.hide()
+        } else {
+            Qt.quit()
+        }
+    }
+
+    function showWindow() {
+        window.show()
+        window.raise()
+        window.requestActivate()
+    }
+
+    // Asks for confirmation if the switch needs a reboot
+    function requestGpuMode(mode) {
+        if (mode === GpuController.currentMode)
+            return
+        var warning = GpuController.confirmationText(mode)
+        if (warning !== "") {
+            gpuConfirmDialog.targetMode = mode
+            gpuConfirmDialog.message = warning
+            showWindow()
+            gpuConfirmDialog.open()
+        } else {
+            GpuController.setMode(mode)
         }
     }
 
     Connections {
         target: TrayManager
         function onShowWindowRequested() {
-            positionBottomRight()
-            window.show()
-            window.raise()
-            window.requestActivate()
+            showWindow()
         }
         function onQuitRequested() {
             Qt.quit()
+        }
+        function onGpuModeRequested(mode) {
+            requestGpuMode(mode)
+        }
+    }
+
+    Connections {
+        target: GpuController
+        function onUserActionRequired(message) {
+            gpuActionDialog.message = message
+            if (window.visible) {
+                gpuActionDialog.open()
+            } else {
+                TrayManager.showMessage(qsTr("GPU mode"), message)
+            }
+        }
+    }
+
+    Connections {
+        target: Notifications
+        function onError(message) {
+            errorToast.show(message)
         }
     }
 
@@ -173,6 +209,8 @@ ApplicationWindow {
                                     }
                                 }
 
+                                opacity: (modelData.profile < 0 || PerformanceController.available) ? 1.0 : 0.5
+
                                 MouseArea {
                                     anchors.fill: parent
                                     onClicked: {
@@ -232,10 +270,13 @@ ApplicationWindow {
                                 { name: "Eco", icon: "qrc:/icons/eco.svg", mode: 0 },
                                 { name: "Standard", icon: "qrc:/icons/hybrid.svg", mode: 1 },
                                 { name: "Ultimate", icon: "qrc:/icons/dedicated.svg", mode: 2 },
-                                { name: "Optimized", icon: "qrc:/icons/vfio.svg", mode: 3 }
+                                { name: "Optimized", icon: "qrc:/icons/optimized.svg", mode: 3 }
                             ]
 
                             delegate: Rectangle {
+                                // Hide modes the hardware/supergfxd doesn't offer
+                                visible: GpuController.supportedModes.indexOf(modelData.mode) >= 0
+                                opacity: GpuController.available ? 1.0 : 0.5
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 70
                                 color: Theme.buttonBackground
@@ -262,17 +303,45 @@ ApplicationWindow {
 
                                 MouseArea {
                                     anchors.fill: parent
-                                    onClicked: GpuController.setMode(modelData.mode)
+                                    enabled: GpuController.available
+                                    hoverEnabled: true
+                                    onClicked: requestGpuMode(modelData.mode)
+                                    ToolTip.visible: containsMouse
+                                    ToolTip.delay: 600
+                                    ToolTip.text: GpuController.modeDescription(modelData.mode)
                                 }
                             }
                         }
                     }
 
                     Label {
-                        text: "dGPU: " + GpuController.gpuPower + (GpuController.gpuPower === "Active" && SystemMonitor.dgpuUsage > 0 ? " (" + Math.round(SystemMonitor.dgpuUsage) + "%)" : "")
+                        visible: GpuController.switchPending
+                        text: qsTr("Pending: %1").arg(GpuController.pendingText)
                         font.pixelSize: 12
-                        color: GpuController.gpuPower === "Active" ? Theme.warning :
-                               GpuController.gpuPower === "Off" ? Theme.success : Theme.textSecondary
+                        color: Theme.warning
+                    }
+
+                    Label {
+                        visible: !GpuController.available
+                        text: qsTr("supergfxd is not running - GPU switching unavailable")
+                        font.pixelSize: 12
+                        color: Theme.textSecondary
+                    }
+
+                    Label {
+                        // supergfxd's power state if available, otherwise the
+                        // kernel runtime PM state of the dGPU
+                        property string power: GpuController.available ? GpuController.gpuPower
+                                               : (SystemMonitor.dgpuState === "active" ? "Active"
+                                                  : SystemMonitor.dgpuState === "suspended" ? "Suspended"
+                                                  : SystemMonitor.dgpuState)
+                        visible: power !== ""
+                        text: "dGPU: " + power
+                              + (SystemMonitor.dgpuUsage > 0 || SystemMonitor.dgpuTemp > 0
+                                 ? " (" + Math.round(SystemMonitor.dgpuUsage) + "%" + (SystemMonitor.dgpuTemp > 0 ? ", " + SystemMonitor.dgpuTemp + "°C" : "") + ")" : "")
+                        font.pixelSize: 12
+                        color: power === "Active" ? Theme.warning :
+                               power === "Off" ? Theme.success : Theme.textSecondary
                     }
                 }
             }
@@ -310,10 +379,23 @@ ApplicationWindow {
                         spacing: 8
 
                         ComboBox {
-                            Layout.preferredWidth: 120
-                            model: ["Static", "Breathe", "Rainbow", "Strobe"]
-                            currentIndex: AuraController.currentMode
-                            onCurrentIndexChanged: AuraController.setMode(currentIndex)
+                            id: auraModeCombo
+                            Layout.preferredWidth: 140
+                            enabled: AuraController.available
+                            model: AuraController.availableModes
+                            textRole: "name"
+                            currentIndex: {
+                                var modes = AuraController.availableModes
+                                for (var i = 0; i < modes.length; i++) {
+                                    if (modes[i].mode === AuraController.currentMode)
+                                        return i
+                                }
+                                return -1
+                            }
+                            // onActivated only fires on user interaction
+                            onActivated: function(index) {
+                                AuraController.setMode(AuraController.availableModes[index].mode)
+                            }
 
                             background: Rectangle {
                                 color: Theme.buttonBackground
@@ -334,6 +416,7 @@ ApplicationWindow {
                             color: Theme.buttonBackground
                             border.color: Theme.border
                             radius: 4
+                            opacity: AuraController.modeUsesColor(AuraController.currentMode) ? 1.0 : 0.4
 
                             RowLayout {
                                 anchors.fill: parent
@@ -344,16 +427,24 @@ ApplicationWindow {
                                     color: Theme.textPrimary
                                 }
                                 Item { Layout.fillWidth: true }
-                                Rectangle {
-                                    width: 24
-                                    height: 24
-                                    color: AuraController.color1
-                                    border.color: Theme.border
-                                    radius: 2
+                                Repeater {
+                                    model: AuraController.modeUsesTwoColors(AuraController.currentMode) ? 2 : 1
+                                    delegate: Rectangle {
+                                        width: 24
+                                        height: 24
+                                        color: index === 0 ? AuraController.color1 : AuraController.color2
+                                        border.color: Theme.border
+                                        radius: 2
 
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        onClicked: colorDialog.open()
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            enabled: AuraController.available
+                                                     && AuraController.modeUsesColor(AuraController.currentMode)
+                                            onClicked: {
+                                                colorDialog.target = index
+                                                colorDialog.open()
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -395,8 +486,12 @@ ApplicationWindow {
                             from: 0
                             to: 3
                             stepSize: 1
+                            snapMode: Slider.SnapAlways
+                            enabled: AuraController.available
                             value: AuraController.brightness
-                            onValueChanged: AuraController.setBrightness(value)
+                            // onMoved only fires on user interaction, so the
+                            // hardware isn't written when the value is loaded
+                            onMoved: AuraController.setBrightness(Math.round(value))
 
                             background: Rectangle {
                                 x: parent.leftPadding
@@ -457,7 +552,7 @@ ApplicationWindow {
                         Item { Layout.fillWidth: true }
                         Switch {
                             checked: SlashController.enabled
-                            onCheckedChanged: SlashController.setEnabled(checked)
+                            onToggled: SlashController.setEnabled(checked)
                         }
                     }
 
@@ -758,7 +853,8 @@ ApplicationWindow {
     // Color picker dialog (simplified)
     Dialog {
         id: colorDialog
-        title: "Select Color"
+        property int target: 0   // 0 = colour 1, 1 = colour 2
+        title: target === 0 ? "Select Color" : "Select Second Color"
         anchors.centerIn: parent
         modal: true
 
@@ -790,7 +886,10 @@ ApplicationWindow {
                     MouseArea {
                         anchors.fill: parent
                         onClicked: {
-                            AuraController.setColor1(modelData)
+                            if (colorDialog.target === 0)
+                                AuraController.setColor1(modelData)
+                            else
+                                AuraController.setColor2(modelData)
                             colorDialog.close()
                         }
                     }
@@ -833,7 +932,7 @@ ApplicationWindow {
             CheckBox {
                 text: "Start minimized"
                 checked: Settings.startMinimized
-                onCheckedChanged: Settings.startMinimized = checked
+                onToggled: Settings.startMinimized = checked
                 contentItem: Label {
                     text: parent.text
                     color: Theme.textPrimary
@@ -844,7 +943,7 @@ ApplicationWindow {
             CheckBox {
                 text: "Start with system"
                 checked: Settings.autoStart
-                onCheckedChanged: Settings.autoStart = checked
+                onToggled: Settings.autoStart = checked
                 contentItem: Label {
                     text: parent.text
                     color: Theme.textPrimary
@@ -855,7 +954,18 @@ ApplicationWindow {
             CheckBox {
                 text: "Minimize to tray"
                 checked: Settings.minimizeToTray
-                onCheckedChanged: Settings.minimizeToTray = checked
+                onToggled: Settings.minimizeToTray = checked
+                contentItem: Label {
+                    text: parent.text
+                    color: Theme.textPrimary
+                    leftPadding: parent.indicator.width + 8
+                }
+            }
+
+            CheckBox {
+                text: "Show tray icon"
+                checked: Settings.showTrayIcon
+                onToggled: Settings.showTrayIcon = checked
                 contentItem: Label {
                     text: parent.text
                     color: Theme.textPrimary
@@ -868,7 +978,7 @@ ApplicationWindow {
     Popup {
         id: keyboardExtraPopup
         anchors.centerIn: parent
-        width: 200
+        width: 240
         padding: 16
 
         background: Rectangle {
@@ -887,23 +997,134 @@ ApplicationWindow {
                 color: Theme.textPrimary
             }
 
-            CheckBox {
-                text: "Disable on battery"
-                contentItem: Label {
-                    text: parent.text
-                    color: Theme.textPrimary
-                    leftPadding: parent.indicator.width + 8
-                }
+            Label {
+                text: "Effect speed"
+                color: Theme.textSecondary
+                font.pixelSize: 12
             }
 
-            CheckBox {
-                text: "Disable on lid close"
-                contentItem: Label {
-                    text: parent.text
-                    color: Theme.textPrimary
-                    leftPadding: parent.indicator.width + 8
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                enabled: AuraController.available && AuraController.modeUsesSpeed(AuraController.currentMode)
+                opacity: enabled ? 1.0 : 0.4
+
+                Repeater {
+                    model: ["Low", "Medium", "High"]
+                    delegate: Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 30
+                        radius: 4
+                        color: Theme.buttonBackground
+                        border.color: AuraController.speed === index ? Theme.accent : Theme.border
+                        border.width: AuraController.speed === index ? 2 : 1
+
+                        Label {
+                            anchors.centerIn: parent
+                            text: modelData
+                            font.pixelSize: 12
+                            color: AuraController.speed === index ? Theme.accent : Theme.textPrimary
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: AuraController.setSpeed(index)
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    // Confirmation before switches that need a reboot (GPU MUX)
+    Dialog {
+        id: gpuConfirmDialog
+        property int targetMode: -1
+        property string message: ""
+        title: qsTr("Switch GPU mode?")
+        anchors.centerIn: parent
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onAccepted: GpuController.setMode(targetMode)
+
+        background: Rectangle {
+            color: Theme.surface
+            border.color: Theme.border
+            radius: 8
+        }
+
+        Label {
+            width: 300
+            text: gpuConfirmDialog.message
+            wrapMode: Text.WordWrap
+            color: Theme.textPrimary
+        }
+    }
+
+    // Shown when supergfxd needs a logout/reboot to finish a switch
+    Dialog {
+        id: gpuActionDialog
+        property string message: ""
+        title: qsTr("GPU mode")
+        anchors.centerIn: parent
+        modal: true
+        standardButtons: Dialog.Ok
+
+        background: Rectangle {
+            color: Theme.surface
+            border.color: Theme.border
+            radius: 8
+        }
+
+        Label {
+            width: 300
+            text: gpuActionDialog.message
+            wrapMode: Text.WordWrap
+            color: Theme.textPrimary
+        }
+    }
+
+    // Error messages from all controllers
+    Rectangle {
+        id: errorToast
+        property string message: ""
+        anchors.bottom: parent.bottom
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottomMargin: 16
+        width: Math.min(parent.width - 32, toastLabel.implicitWidth + 32)
+        height: toastLabel.implicitHeight + 20
+        radius: 6
+        color: Theme.error
+        visible: opacity > 0
+        opacity: 0
+        z: 100
+
+        function show(text) {
+            message = text
+            opacity = 1
+            toastTimer.restart()
+        }
+
+        Behavior on opacity { NumberAnimation { duration: 200 } }
+
+        Label {
+            id: toastLabel
+            anchors.centerIn: parent
+            width: Math.min(implicitWidth, errorToast.parent.width - 64)
+            text: errorToast.message
+            wrapMode: Text.WordWrap
+            color: "white"
+        }
+
+        Timer {
+            id: toastTimer
+            interval: 5000
+            onTriggered: errorToast.opacity = 0
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: errorToast.opacity = 0
         }
     }
 }
