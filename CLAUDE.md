@@ -19,6 +19,14 @@ cmake -S . -B build -G Ninja && cmake --build build
 
 Benötigt asusd (asusctl ≥ 6.4) auf dem System; Quellcode liegt in `~/src/asusctl`.
 
+## Screenshot (ohne Display)
+
+```bash
+GHELPER_SCREENSHOT=/pfad/shot.png QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software ./build/g-helper-linux
+```
+
+Rendert das Hauptfenster nach 3 s in eine PNG-Datei und beendet sich.
+
 ## Git Workflow
 
 Nach jeder Änderung am Code immer committen und pushen:

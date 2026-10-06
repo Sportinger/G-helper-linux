@@ -9,14 +9,21 @@ import "dialogs"
 
 ApplicationWindow {
     id: window
+
     // Shown from C++ (unless started minimized), which also positions it
     visible: false
-    width: 420
-    height: 700
-    minimumWidth: 400
-    minimumHeight: 600
-    title: qsTr("G-Helper Linux")
+    title: deviceName !== "" ? "G-Helper — " + deviceName : "G-Helper"
     color: Theme.background
+
+    // The window is exactly as tall as its content, like G-Helper on
+    // Windows. Only on very small screens does the content scroll.
+    readonly property int fittedHeight: Math.min(content.implicitHeight, Screen.desktopAvailableHeight - 40)
+    width: 470
+    height: fittedHeight
+    minimumWidth: 470
+    maximumWidth: 470
+    minimumHeight: fittedHeight
+    maximumHeight: fittedHeight
 
     onClosing: function(close) {
         if (Settings.minimizeToTray && TrayManager.visible) {
@@ -48,820 +55,740 @@ ApplicationWindow {
         }
     }
 
+    function openFanCurveWindow() {
+        if (!fanCurveLoader.active)
+            fanCurveLoader.active = true
+        if (fanCurveLoader.item)
+            fanCurveLoader.item.open(window.x, window.y)
+    }
+
+    function profileColor(profile) {
+        switch (profile) {
+            case 0: return Theme.colorEco
+            case 1: return Theme.colorStandard
+            case 2: return Theme.colorTurbo
+            default: return Theme.colorCustom
+        }
+    }
+
+    function gpuColor(mode) {
+        switch (mode) {
+            case 0: return Theme.colorEco
+            case 1: return Theme.colorStandard
+            case 2: return Theme.colorTurbo
+            default: return Theme.colorEco
+        }
+    }
+
+    // GPU mode as G-Helper describes it in the section header
+    function gpuModeText() {
+        if (!GpuController.available)
+            return qsTr("unavailable")
+        switch (GpuController.currentMode) {
+            case 0: return qsTr("iGPU only")
+            case 1: return qsTr("iGPU + dGPU")
+            case 2: return qsTr("dGPU exclusive")
+            case 3: return GpuController.currentModeName
+            default: return GpuController.currentModeName
+        }
+    }
+
     Connections {
         target: TrayManager
-        function onShowWindowRequested() {
-            showWindow()
-        }
-        function onQuitRequested() {
-            Qt.quit()
-        }
-        function onGpuModeRequested(mode) {
-            requestGpuMode(mode)
-        }
+        function onShowWindowRequested() { showWindow() }
+        function onQuitRequested() { Qt.quit() }
+        function onGpuModeRequested(mode) { requestGpuMode(mode) }
     }
 
     Connections {
         target: GpuController
         function onUserActionRequired(message) {
             gpuActionDialog.message = message
-            if (window.visible) {
+            if (window.visible)
                 gpuActionDialog.open()
-            } else {
+            else
                 TrayManager.showMessage(qsTr("GPU mode"), message)
-            }
         }
     }
 
     Connections {
         target: Notifications
-        function onError(message) {
-            errorToast.show(message)
+        function onError(message) { errorToast.show(message) }
+    }
+
+    // ------------------------------------------------------------------
+    // Reusable pieces
+    // ------------------------------------------------------------------
+
+    // Section title with icon on the left and live values on the right
+    component SectionHeader: RowLayout {
+        property url iconSource
+        property string title
+        property string info
+        Layout.fillWidth: true
+        spacing: 7
+
+        Image {
+            source: parent.iconSource
+            sourceSize: Qt.size(20, 20)
+            Layout.preferredWidth: 20
+            Layout.preferredHeight: 20
+        }
+        Label {
+            text: parent.title
+            font.pixelSize: 15
+            font.bold: true
+            color: Theme.textPrimary
+            elide: Text.ElideRight
+            Layout.fillWidth: true
+        }
+        Label {
+            text: parent.info
+            font.pixelSize: 13
+            color: Theme.textPrimary
+            visible: text !== ""
         }
     }
 
-    // Header
-    header: ToolBar {
-        height: 50
-        background: Rectangle {
-            color: Theme.background
-            Rectangle {
-                anchors.bottom: parent.bottom
-                width: parent.width
-                height: 1
-                color: Theme.border
+    // Big G-Helper style button: icon above label, coloured border when selected
+    component ModeTile: Rectangle {
+        id: tile
+        property string label
+        property url iconSource
+        property bool selected: false
+        property color selectedColor: Theme.accent
+        property bool tileEnabled: true
+        property string tooltip: ""
+        signal clicked()
+
+        Layout.fillWidth: true
+        Layout.preferredWidth: 1
+        Layout.preferredHeight: 64
+        radius: 5
+        color: tileMouse.containsMouse && tileEnabled ? Theme.buttonHover : Theme.buttonBackground
+        border.width: selected ? 2 : 0
+        border.color: selectedColor
+        opacity: tileEnabled ? 1.0 : 0.4
+
+        Column {
+            anchors.centerIn: parent
+            spacing: 5
+
+            Image {
+                anchors.horizontalCenter: parent.horizontalCenter
+                source: tile.iconSource
+                sourceSize: Qt.size(22, 22)
             }
-        }
-
-        RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: 16
-            anchors.rightMargin: 16
-
             Label {
-                text: "G-Helper"
-                font.pixelSize: 20
-                font.bold: true
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: tile.label
+                font.pixelSize: 13
                 color: Theme.textPrimary
             }
+        }
 
-            Item { Layout.fillWidth: true }
-
-            Rectangle {
-                width: 10
-                height: 10
-                radius: 5
-                color: DBusWatcher.allConnected ? Theme.success : Theme.error
-            }
-
-            IconButton {
-                icon.source: "qrc:/icons/info.svg"
-                onClicked: aboutDialog.open()
-            }
-
-            IconButton {
-                icon.source: "qrc:/icons/settings.svg"
-                onClicked: settingsPopup.open()
-            }
+        MouseArea {
+            id: tileMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            enabled: tile.tileEnabled
+            cursorShape: Qt.PointingHandCursor
+            onClicked: tile.clicked()
+            ToolTip.visible: containsMouse && tile.tooltip !== ""
+            ToolTip.delay: 700
+            ToolTip.text: tile.tooltip
         }
     }
 
-    // Main content
-    ScrollView {
+    // Flat dark button like G-Helper's "Color" / "Extra" / "Quit"
+    component FlatButton: Rectangle {
+        id: flat
+        property string text
+        property url iconSource: ""
+        property color swatch: "transparent"
+        property bool showSwatch: false
+        signal clicked()
+
+        Layout.preferredHeight: 32
+        radius: 3
+        color: flatMouse.containsMouse && enabled ? Theme.buttonHover : Theme.buttonBackground
+        opacity: enabled ? 1.0 : 0.4
+
+        RowLayout {
+            anchors.centerIn: parent
+            spacing: 8
+            Image {
+                visible: flat.iconSource.toString() !== ""
+                source: flat.iconSource
+                sourceSize: Qt.size(16, 16)
+            }
+            Label {
+                text: flat.text
+                font.pixelSize: 13
+                color: Theme.textPrimary
+            }
+            Rectangle {
+                visible: flat.showSwatch
+                width: 16
+                height: 16
+                color: flat.swatch
+                border.color: "#808080"
+            }
+        }
+
+        MouseArea {
+            id: flatMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: flat.clicked()
+        }
+    }
+
+    // G-Helper style dropdown
+    component DarkCombo: ComboBox {
+        id: combo
+        Layout.preferredHeight: 32
+        font.pixelSize: 13
+
+        background: Rectangle {
+            radius: 3
+            color: combo.hovered ? Theme.buttonHover : Theme.controlBackground
+        }
+        contentItem: Label {
+            text: combo.displayText
+            color: Theme.textPrimary
+            font: combo.font
+            verticalAlignment: Text.AlignVCenter
+            leftPadding: 8
+            elide: Text.ElideRight
+        }
+        indicator: Label {
+            x: combo.width - width - 8
+            anchors.verticalCenter: parent.verticalCenter
+            text: "▾"
+            color: Theme.textSecondary
+            font.pixelSize: 12
+        }
+    }
+
+    // Slider with G-Helper's blue track
+    component BlueSlider: Slider {
+        id: slider
+        Layout.fillWidth: true
+        Layout.preferredHeight: 24
+
+        background: Rectangle {
+            x: slider.leftPadding
+            y: slider.topPadding + slider.availableHeight / 2 - height / 2
+            width: slider.availableWidth
+            height: 4
+            radius: 2
+            color: "#5a5a5a"
+
+            Rectangle {
+                width: slider.visualPosition * parent.width
+                height: parent.height
+                radius: 2
+                color: Theme.accent
+            }
+        }
+        handle: Rectangle {
+            x: slider.leftPadding + slider.visualPosition * (slider.availableWidth - width)
+            y: slider.topPadding + slider.availableHeight / 2 - height / 2
+            width: 18
+            height: 18
+            radius: 9
+            color: slider.pressed ? Theme.accentLight : Theme.accent
+            border.color: Theme.background
+            border.width: 2
+        }
+    }
+
+    // Windows 11 style toggle switch
+    component DarkSwitch: Switch {
+        id: sw
+        padding: 0
+        spacing: 0
+        implicitWidth: 40
+        Layout.preferredWidth: 40
+        Layout.preferredHeight: 26
+        indicator: Rectangle {
+            implicitWidth: 40
+            implicitHeight: 20
+            x: sw.leftPadding
+            y: parent.height / 2 - height / 2
+            radius: 10
+            color: sw.checked ? Theme.accent : "transparent"
+            border.color: sw.checked ? Theme.accent : Theme.textSecondary
+            border.width: 1
+
+            Rectangle {
+                width: sw.checked ? 14 : 12
+                height: width
+                radius: width / 2
+                x: sw.checked ? parent.width - width - 3 : 4
+                anchors.verticalCenter: parent.verticalCenter
+                color: sw.checked ? "#000000" : Theme.textSecondary
+                Behavior on x { NumberAnimation { duration: 120 } }
+            }
+        }
+        contentItem: Item {}
+    }
+
+    // Windows style checkbox
+    component DarkCheckBox: CheckBox {
+        id: cb
+        font.pixelSize: 13
+        indicator: Rectangle {
+            implicitWidth: 18
+            implicitHeight: 18
+            x: cb.leftPadding
+            y: parent.height / 2 - height / 2
+            radius: 3
+            color: cb.checked ? Theme.accent : "transparent"
+            border.color: cb.checked ? Theme.accent : Theme.textSecondary
+            border.width: 1
+
+            Label {
+                anchors.centerIn: parent
+                visible: cb.checked
+                text: "✓"
+                font.pixelSize: 13
+                font.bold: true
+                color: "#000000"
+            }
+        }
+        contentItem: Label {
+            text: cb.text
+            font: cb.font
+            color: Theme.textPrimary
+            leftPadding: cb.indicator.width + 8
+            verticalAlignment: Text.AlignVCenter
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Content
+    // ------------------------------------------------------------------
+
+    Flickable {
         anchors.fill: parent
-        contentWidth: availableWidth
+        contentWidth: width
+        contentHeight: content.implicitHeight
+        interactive: contentHeight > height
         clip: true
+        boundsBehavior: Flickable.StopAtBounds
 
         ColumnLayout {
+            id: content
             width: parent.width
             spacing: 0
 
-            // === Performance Mode Section ===
-            Item {
+            ColumnLayout {
                 Layout.fillWidth: true
-                Layout.preferredHeight: sectionPerf.implicitHeight + 24
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.topMargin: 16
+                Layout.margins: 18
+                Layout.bottomMargin: 10
+                spacing: 9
 
-                ColumnLayout {
-                    id: sectionPerf
-                    anchors.fill: parent
-                    spacing: 12
+                // === Performance mode ===
+                SectionHeader {
+                    iconSource: "qrc:/icons/section-mode.svg"
+                    title: qsTr("Mode: %1").arg(PerformanceController.currentProfileName)
+                    info: qsTr("CPU: %1°C Fan: %2RPM").arg(SystemMonitor.cpuTemp).arg(SystemMonitor.cpuFanRpm)
+                }
 
-                    // Header with status
-                    RowLayout {
-                        Layout.fillWidth: true
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 9
 
-                        Image {
-                            source: "qrc:/icons/performance.svg"
-                            sourceSize: Qt.size(20, 20)
-                        }
-                        Label {
-                            text: "Mode: " + PerformanceController.currentProfileName
-                            font.pixelSize: 15
-                            font.bold: true
-                            color: Theme.textPrimary
-                        }
-                        Item { Layout.fillWidth: true }
-                        Label {
-                            text: "CPU: " + SystemMonitor.cpuTemp + "°C Fan: " + SystemMonitor.cpuFanRpm + "RPM"
-                            font.pixelSize: 13
-                            color: Theme.textSecondary
-                        }
+                    ModeTile {
+                        label: qsTr("Silent")
+                        iconSource: "qrc:/icons/mode-silent.svg"
+                        selected: PerformanceController.currentProfile === 0
+                        selectedColor: Theme.colorEco
+                        tileEnabled: PerformanceController.available
+                        tooltip: PerformanceController.profileDescription(0)
+                        onClicked: PerformanceController.setProfile(0)
                     }
+                    ModeTile {
+                        label: qsTr("Balanced")
+                        iconSource: "qrc:/icons/mode-balanced.svg"
+                        selected: PerformanceController.currentProfile === 1
+                        selectedColor: Theme.colorStandard
+                        tileEnabled: PerformanceController.available
+                        tooltip: PerformanceController.profileDescription(1)
+                        onClicked: PerformanceController.setProfile(1)
+                    }
+                    ModeTile {
+                        label: qsTr("Turbo")
+                        iconSource: "qrc:/icons/mode-turbo.svg"
+                        selected: PerformanceController.currentProfile === 2
+                        selectedColor: Theme.colorTurbo
+                        tileEnabled: PerformanceController.available
+                        tooltip: PerformanceController.profileDescription(2)
+                        onClicked: PerformanceController.setProfile(2)
+                    }
+                    ModeTile {
+                        label: qsTr("Fans + Power")
+                        iconSource: "qrc:/icons/mode-fans.svg"
+                        // Orange like G-Helper's custom mode while custom curves are active
+                        selected: FanController.curvesEnabled
+                        selectedColor: Theme.colorCustom
+                        tooltip: FanController.curvesEnabled ? qsTr("Custom fan curves active for this mode")
+                                                             : qsTr("Edit fan curves")
+                        onClicked: openFanCurveWindow()
+                    }
+                }
 
-                    // Mode buttons
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
+                Item { Layout.preferredHeight: 6 }
 
-                        Repeater {
-                            model: [
-                                { name: "Silent", icon: "qrc:/icons/quiet.svg", profile: 0 },
-                                { name: "Balanced", icon: "qrc:/icons/balanced.svg", profile: 1 },
-                                { name: "Turbo", icon: "qrc:/icons/turbo.svg", profile: 2 },
-                                { name: "Fans + Power", icon: "qrc:/icons/fan.svg", profile: -1 }
-                            ]
+                // === GPU mode ===
+                SectionHeader {
+                    iconSource: "qrc:/icons/gpu.svg"
+                    title: qsTr("GPU Mode: %1").arg(gpuModeText())
+                    // dGPU temperature while it is awake, otherwise the iGPU
+                    info: qsTr("GPU: %1°C Fan: %2RPM")
+                          .arg(SystemMonitor.dgpuTemp > 0 ? SystemMonitor.dgpuTemp : SystemMonitor.gpuTemp)
+                          .arg(SystemMonitor.gpuFanRpm)
+                }
 
-                            delegate: Rectangle {
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 70
-                                color: Theme.buttonBackground
-                                border.color: PerformanceController.currentProfile === modelData.profile ? Theme.accent : Theme.border
-                                border.width: PerformanceController.currentProfile === modelData.profile ? 2 : 1
-                                radius: 4
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 9
 
-                                ColumnLayout {
-                                    anchors.centerIn: parent
-                                    spacing: 4
+                    Repeater {
+                        model: [
+                            { name: qsTr("Eco"), icon: "qrc:/icons/gpu-eco.svg", mode: 0 },
+                            { name: qsTr("Standard"), icon: "qrc:/icons/gpu-standard.svg", mode: 1 },
+                            { name: qsTr("Ultimate"), icon: "qrc:/icons/gpu-ultimate.svg", mode: 2 },
+                            { name: qsTr("Optimized"), icon: "qrc:/icons/gpu-optimized.svg", mode: 3 }
+                        ]
 
-                                    Image {
-                                        Layout.alignment: Qt.AlignHCenter
-                                        source: modelData.icon
-                                        sourceSize: Qt.size(24, 24)
-                                    }
-                                    Label {
-                                        Layout.alignment: Qt.AlignHCenter
-                                        text: modelData.name
-                                        font.pixelSize: 12
-                                        color: PerformanceController.currentProfile === modelData.profile ? Theme.accent : Theme.textPrimary
-                                    }
-                                }
-
-                                opacity: (modelData.profile < 0 || PerformanceController.available) ? 1.0 : 0.5
-
-                                MouseArea {
-                                    anchors.fill: parent
-                                    onClicked: {
-                                        if (modelData.profile >= 0) {
-                                            PerformanceController.setProfile(modelData.profile)
-                                        } else {
-                                            openFanCurveWindow()
-                                        }
-                                    }
-                                }
-                            }
+                        delegate: ModeTile {
+                            required property var modelData
+                            label: modelData.name
+                            iconSource: modelData.icon
+                            selected: GpuController.currentMode === modelData.mode
+                            selectedColor: gpuColor(modelData.mode)
+                            tileEnabled: GpuController.available
+                                         && GpuController.supportedModes.indexOf(modelData.mode) >= 0
+                            tooltip: GpuController.modeDescription(modelData.mode)
+                            onClicked: requestGpuMode(modelData.mode)
                         }
                     }
                 }
-            }
 
-            // === GPU Mode Section ===
-            Item {
-                Layout.fillWidth: true
-                Layout.preferredHeight: sectionGpu.implicitHeight + 24
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.topMargin: 16
-
-                ColumnLayout {
-                    id: sectionGpu
-                    anchors.fill: parent
-                    spacing: 12
-
-                    RowLayout {
-                        Layout.fillWidth: true
-
-                        Image {
-                            source: "qrc:/icons/gpu.svg"
-                            sourceSize: Qt.size(20, 20)
-                        }
-                        Label {
-                            text: "GPU Mode: " + GpuController.currentModeName
-                            font.pixelSize: 15
-                            font.bold: true
-                            color: Theme.textPrimary
-                        }
-                        Item { Layout.fillWidth: true }
-                        Label {
-                            text: "GPU: " + SystemMonitor.gpuTemp + "°C Fan: " + SystemMonitor.gpuFanRpm + "RPM"
-                            font.pixelSize: 13
-                            color: Theme.textSecondary
-                        }
+                // One status line: pending switch, missing daemon or dGPU state
+                Label {
+                    Layout.fillWidth: true
+                    font.pixelSize: 12
+                    elide: Text.ElideRight
+                    color: GpuController.switchPending ? Theme.warning : Theme.textSecondary
+                    text: {
+                        if (GpuController.switchPending)
+                            return qsTr("Pending: %1").arg(GpuController.pendingText)
+                        var state = GpuController.available ? GpuController.gpuPower
+                                  : (SystemMonitor.dgpuState === "active" ? "Active"
+                                     : SystemMonitor.dgpuState === "suspended" ? "Suspended"
+                                     : SystemMonitor.dgpuState)
+                        var line = state !== "" ? "dGPU: " + state : ""
+                        if (SystemMonitor.dgpuUsage > 0)
+                            line += " · " + Math.round(SystemMonitor.dgpuUsage) + "%"
+                        if (!GpuController.available)
+                            line += (line !== "" ? " · " : "") + qsTr("GPU switching not available yet")
+                        return line
                     }
+                }
 
-                    RowLayout {
+                Item { Layout.preferredHeight: 2 }
+
+                // === Keyboard ===
+                SectionHeader {
+                    iconSource: "qrc:/icons/keyboard.svg"
+                    title: qsTr("Laptop Keyboard")
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 9
+                    enabled: AuraController.available
+
+                    DarkCombo {
+                        id: auraModeCombo
                         Layout.fillWidth: true
-                        spacing: 8
-
-                        Repeater {
-                            model: [
-                                { name: "Eco", icon: "qrc:/icons/eco.svg", mode: 0 },
-                                { name: "Standard", icon: "qrc:/icons/hybrid.svg", mode: 1 },
-                                { name: "Ultimate", icon: "qrc:/icons/dedicated.svg", mode: 2 },
-                                { name: "Optimized", icon: "qrc:/icons/optimized.svg", mode: 3 }
-                            ]
-
-                            delegate: Rectangle {
-                                // Hide modes the hardware/supergfxd doesn't offer
-                                visible: GpuController.supportedModes.indexOf(modelData.mode) >= 0
-                                opacity: GpuController.available ? 1.0 : 0.5
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 70
-                                color: Theme.buttonBackground
-                                border.color: GpuController.currentMode === modelData.mode ? Theme.accent : Theme.border
-                                border.width: GpuController.currentMode === modelData.mode ? 2 : 1
-                                radius: 4
-
-                                ColumnLayout {
-                                    anchors.centerIn: parent
-                                    spacing: 4
-
-                                    Image {
-                                        Layout.alignment: Qt.AlignHCenter
-                                        source: modelData.icon
-                                        sourceSize: Qt.size(24, 24)
-                                    }
-                                    Label {
-                                        Layout.alignment: Qt.AlignHCenter
-                                        text: modelData.name
-                                        font.pixelSize: 12
-                                        color: GpuController.currentMode === modelData.mode ? Theme.accent : Theme.textPrimary
-                                    }
-                                }
-
-                                MouseArea {
-                                    anchors.fill: parent
-                                    enabled: GpuController.available
-                                    hoverEnabled: true
-                                    onClicked: requestGpuMode(modelData.mode)
-                                    ToolTip.visible: containsMouse
-                                    ToolTip.delay: 600
-                                    ToolTip.text: GpuController.modeDescription(modelData.mode)
-                                }
+                        Layout.preferredWidth: 1
+                        model: AuraController.availableModes
+                        textRole: "name"
+                        currentIndex: {
+                            var modes = AuraController.availableModes
+                            for (var i = 0; i < modes.length; i++) {
+                                if (modes[i].mode === AuraController.currentMode)
+                                    return i
                             }
+                            return -1
+                        }
+                        // onActivated only fires on user interaction
+                        onActivated: function(index) {
+                            AuraController.setMode(AuraController.availableModes[index].mode)
                         }
                     }
 
-                    Label {
-                        visible: GpuController.switchPending
-                        text: qsTr("Pending: %1").arg(GpuController.pendingText)
-                        font.pixelSize: 12
-                        color: Theme.warning
+                    FlatButton {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 1
+                        text: qsTr("Color")
+                        showSwatch: true
+                        swatch: AuraController.color1
+                        enabled: AuraController.modeUsesColor(AuraController.currentMode)
+                        onClicked: {
+                            colorDialog.target = 0
+                            colorDialog.open()
+                        }
                     }
 
+                    FlatButton {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 1
+                        text: qsTr("Extra")
+                        iconSource: "qrc:/icons/settings.svg"
+                        onClicked: keyboardExtraPopup.open()
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+                    enabled: AuraController.available
+
                     Label {
-                        visible: !GpuController.available
-                        text: qsTr("supergfxd is not running - GPU switching unavailable")
-                        font.pixelSize: 12
+                        text: qsTr("Brightness")
+                        font.pixelSize: 13
                         color: Theme.textSecondary
                     }
-
+                    BlueSlider {
+                        from: 0
+                        to: 3
+                        stepSize: 1
+                        snapMode: Slider.SnapAlways
+                        value: AuraController.brightness
+                        // onMoved only fires on user interaction, so the
+                        // hardware isn't written when the value is loaded
+                        onMoved: AuraController.setBrightness(Math.round(value))
+                    }
                     Label {
-                        // supergfxd's power state if available, otherwise the
-                        // kernel runtime PM state of the dGPU
-                        property string power: GpuController.available ? GpuController.gpuPower
-                                               : (SystemMonitor.dgpuState === "active" ? "Active"
-                                                  : SystemMonitor.dgpuState === "suspended" ? "Suspended"
-                                                  : SystemMonitor.dgpuState)
-                        visible: power !== ""
-                        text: "dGPU: " + power
-                              + (SystemMonitor.dgpuUsage > 0 || SystemMonitor.dgpuTemp > 0
-                                 ? " (" + Math.round(SystemMonitor.dgpuUsage) + "%" + (SystemMonitor.dgpuTemp > 0 ? ", " + SystemMonitor.dgpuTemp + "°C" : "") + ")" : "")
-                        font.pixelSize: 12
-                        color: power === "Active" ? Theme.warning :
-                               power === "Off" ? Theme.success : Theme.textSecondary
+                        Layout.preferredWidth: 52
+                        horizontalAlignment: Text.AlignRight
+                        font.pixelSize: 13
+                        color: Theme.textPrimary
+                        text: [qsTr("Off"), qsTr("Low"), qsTr("Medium"), qsTr("High")][AuraController.brightness] || ""
                     }
                 }
-            }
 
-            // === Keyboard Section ===
-            Item {
-                Layout.fillWidth: true
-                Layout.preferredHeight: sectionKb.implicitHeight + 24
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.topMargin: 16
+                // === Slash lightbar (only on models that have one) ===
+                Item {
+                    visible: SlashController.available
+                    Layout.preferredHeight: 2
+                }
 
-                ColumnLayout {
-                    id: sectionKb
-                    anchors.fill: parent
-                    spacing: 12
+                RowLayout {
+                    visible: SlashController.available
+                    Layout.fillWidth: true
+                    spacing: 7
 
-                    RowLayout {
-                        Layout.fillWidth: true
-
-                        Image {
-                            source: "qrc:/icons/keyboard.svg"
-                            sourceSize: Qt.size(20, 20)
-                        }
-                        Label {
-                            text: "Laptop Keyboard"
-                            font.pixelSize: 15
-                            font.bold: true
-                            color: Theme.textPrimary
-                        }
+                    SectionHeader {
+                        iconSource: "qrc:/icons/section-slash.svg"
+                        title: qsTr("Slash Lightbar")
                     }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-
-                        ComboBox {
-                            id: auraModeCombo
-                            Layout.preferredWidth: 140
-                            enabled: AuraController.available
-                            model: AuraController.availableModes
-                            textRole: "name"
-                            currentIndex: {
-                                var modes = AuraController.availableModes
-                                for (var i = 0; i < modes.length; i++) {
-                                    if (modes[i].mode === AuraController.currentMode)
-                                        return i
-                                }
-                                return -1
-                            }
-                            // onActivated only fires on user interaction
-                            onActivated: function(index) {
-                                AuraController.setMode(AuraController.availableModes[index].mode)
-                            }
-
-                            background: Rectangle {
-                                color: Theme.buttonBackground
-                                border.color: Theme.border
-                                radius: 4
-                            }
-                            contentItem: Label {
-                                text: parent.displayText
-                                color: Theme.textPrimary
-                                verticalAlignment: Text.AlignVCenter
-                                leftPadding: 8
-                            }
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 36
-                            color: Theme.buttonBackground
-                            border.color: Theme.border
-                            radius: 4
-                            opacity: AuraController.modeUsesColor(AuraController.currentMode) ? 1.0 : 0.4
-
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.margins: 8
-
-                                Label {
-                                    text: "Color"
-                                    color: Theme.textPrimary
-                                }
-                                Item { Layout.fillWidth: true }
-                                Repeater {
-                                    model: AuraController.modeUsesTwoColors(AuraController.currentMode) ? 2 : 1
-                                    delegate: Rectangle {
-                                        width: 24
-                                        height: 24
-                                        color: index === 0 ? AuraController.color1 : AuraController.color2
-                                        border.color: Theme.border
-                                        radius: 2
-
-                                        MouseArea {
-                                            anchors.fill: parent
-                                            enabled: AuraController.available
-                                                     && AuraController.modeUsesColor(AuraController.currentMode)
-                                            onClicked: {
-                                                colorDialog.target = index
-                                                colorDialog.open()
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            Layout.preferredWidth: 80
-                            Layout.preferredHeight: 36
-                            color: Theme.buttonBackground
-                            border.color: Theme.border
-                            radius: 4
-
-                            Label {
-                                anchors.centerIn: parent
-                                text: "Extra"
-                                color: Theme.textPrimary
-                            }
-
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: keyboardExtraPopup.open()
-                            }
-                        }
+                    DarkSwitch {
+                        checked: SlashController.enabled
+                        onToggled: SlashController.setEnabled(checked)
                     }
+                }
 
-                    // Brightness slider
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
+                RowLayout {
+                    visible: SlashController.available
+                    Layout.fillWidth: true
+                    spacing: 10
+                    enabled: SlashController.enabled
+                    opacity: enabled ? 1.0 : 0.45
 
-                        Label {
-                            text: "Brightness"
-                            color: Theme.textSecondary
-                            font.pixelSize: 12
-                        }
-
-                        Slider {
-                            Layout.fillWidth: true
-                            from: 0
-                            to: 3
-                            stepSize: 1
-                            snapMode: Slider.SnapAlways
-                            enabled: AuraController.available
-                            value: AuraController.brightness
-                            // onMoved only fires on user interaction, so the
-                            // hardware isn't written when the value is loaded
-                            onMoved: AuraController.setBrightness(Math.round(value))
-
-                            background: Rectangle {
-                                x: parent.leftPadding
-                                y: parent.topPadding + parent.availableHeight / 2 - height / 2
-                                width: parent.availableWidth
-                                height: 4
-                                radius: 2
-                                color: Theme.border
-
-                                Rectangle {
-                                    width: parent.parent.visualPosition * parent.width
-                                    height: parent.height
-                                    color: Theme.accent
-                                    radius: 2
-                                }
-                            }
-
-                            handle: Rectangle {
-                                x: parent.leftPadding + parent.visualPosition * (parent.availableWidth - width)
-                                y: parent.topPadding + parent.availableHeight / 2 - height / 2
-                                width: 16
-                                height: 16
-                                radius: 8
-                                color: Theme.accent
-                            }
+                    DarkCombo {
+                        Layout.preferredWidth: 140
+                        model: SlashController.availableModes
+                        currentIndex: SlashController.availableModes.indexOf(SlashController.currentMode)
+                        onActivated: SlashController.setMode(currentText)
+                    }
+                    BlueSlider {
+                        from: 0
+                        to: 255
+                        stepSize: 1
+                        value: SlashController.brightness
+                        onPressedChanged: {
+                            if (!pressed)
+                                SlashController.setBrightness(Math.round(value))
                         }
                     }
                 }
-            }
 
-            // === Slash Lightbar Section ===
-            Item {
-                visible: SlashController.available
-                Layout.fillWidth: true
-                Layout.preferredHeight: sectionSlash.implicitHeight + 24
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.topMargin: 16
+                Item { Layout.preferredHeight: 2 }
 
-                ColumnLayout {
-                    id: sectionSlash
-                    anchors.fill: parent
-                    spacing: 12
-
-                    RowLayout {
-                        Layout.fillWidth: true
-
-                        Image {
-                            source: "qrc:/icons/led-rainbow.svg"
-                            sourceSize: Qt.size(20, 20)
-                        }
-                        Label {
-                            text: "Slash Lightbar"
-                            font.pixelSize: 15
-                            font.bold: true
-                            color: Theme.textPrimary
-                        }
-                        Item { Layout.fillWidth: true }
-                        Switch {
-                            checked: SlashController.enabled
-                            onToggled: SlashController.setEnabled(checked)
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-
-                        ComboBox {
-                            id: slashModeCombo
-                            Layout.preferredWidth: 140
-                            model: SlashController.availableModes
-                            currentIndex: SlashController.availableModes.indexOf(SlashController.currentMode)
-                            onActivated: SlashController.setMode(currentText)
-
-                            background: Rectangle {
-                                color: Theme.buttonBackground
-                                border.color: Theme.border
-                                radius: 4
-                            }
-                            contentItem: Label {
-                                text: parent.displayText
-                                color: Theme.textPrimary
-                                verticalAlignment: Text.AlignVCenter
-                                leftPadding: 8
-                            }
-                        }
-
-                        Label {
-                            text: "Brightness"
-                            color: Theme.textSecondary
-                            font.pixelSize: 12
-                        }
-
-                        Slider {
-                            Layout.fillWidth: true
-                            from: 0
-                            to: 255
-                            stepSize: 1
-                            value: SlashController.brightness
-                            onPressedChanged: {
-                                if (!pressed) {
-                                    SlashController.setBrightness(Math.round(value))
-                                }
-                            }
-
-                            background: Rectangle {
-                                x: parent.leftPadding
-                                y: parent.topPadding + parent.availableHeight / 2 - height / 2
-                                width: parent.availableWidth
-                                height: 4
-                                radius: 2
-                                color: Theme.border
-
-                                Rectangle {
-                                    width: parent.parent.visualPosition * parent.width
-                                    height: parent.height
-                                    color: Theme.accent
-                                    radius: 2
-                                }
-                            }
-
-                            handle: Rectangle {
-                                x: parent.leftPadding + parent.visualPosition * (parent.availableWidth - width)
-                                y: parent.topPadding + parent.availableHeight / 2 - height / 2
-                                width: 16
-                                height: 16
-                                radius: 8
-                                color: Theme.accent
-                            }
-                        }
+                // === Battery ===
+                SectionHeader {
+                    iconSource: BatteryController.isCharging ? "qrc:/icons/charging.svg" : "qrc:/icons/battery.svg"
+                    title: qsTr("Battery Charge Limit: %1%").arg(chargeSlider.pressed ? Math.round(chargeSlider.value)
+                                                                                       : BatteryController.chargeLimit)
+                    info: {
+                        var text = BatteryController.currentCharge + "%"
+                        if (BatteryController.isCharging)
+                            text += " · " + qsTr("Charging: %1W").arg(BatteryController.powerDraw.toFixed(1))
+                        else if (SystemMonitor.onBattery)
+                            text += " · " + qsTr("Discharging: %1W").arg(SystemMonitor.batteryPower.toFixed(1))
+                        else
+                            text += " · " + qsTr("Plugged in")
+                        return text
                     }
                 }
-            }
 
-            // === Battery Section ===
-            Item {
-                Layout.fillWidth: true
-                Layout.preferredHeight: sectionBat.implicitHeight + 24
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.topMargin: 16
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+                    enabled: BatteryController.available
 
-                ColumnLayout {
-                    id: sectionBat
-                    anchors.fill: parent
-                    spacing: 12
-
-                    RowLayout {
-                        Layout.fillWidth: true
-
-                        Image {
-                            source: "qrc:/icons/battery.svg"
-                            sourceSize: Qt.size(20, 20)
-                        }
-                        Label {
-                            text: "Battery"
-                            font.pixelSize: 15
-                            font.bold: true
-                            color: Theme.textPrimary
-                        }
-                        Item { Layout.fillWidth: true }
-                        Label {
-                            text: {
-                                var systemText = "System: " + SystemMonitor.systemPower.toFixed(1) + "W"
-                                if (SystemMonitor.onBattery) {
-                                    return systemText + " (Batterie)"
-                                } else {
-                                    return systemText + " (geschätzt)"
-                                }
-                            }
-                            font.pixelSize: 13
-                            color: Theme.textSecondary
-
-                            ToolTip.visible: powerMouseArea.containsMouse
-                            ToolTip.delay: 500
-                            ToolTip.text: {
-                                var details = "APU: " + SystemMonitor.apuPower.toFixed(1) + "W\n"
-                                details += "Display (~" + SystemMonitor.displayBrightness + "%): " + SystemMonitor.displayPower.toFixed(1) + "W"
-                                if (SystemMonitor.onBattery) {
-                                    details += "\nBatterie-Entladung: " + SystemMonitor.batteryPower.toFixed(1) + "W"
-                                } else {
-                                    details += "\nSonstige (SSD/WiFi/RAM): ~5W"
-                                }
-                                return details
-                            }
-
-                            MouseArea {
-                                id: powerMouseArea
-                                anchors.fill: parent
-                                hoverEnabled: true
-                            }
-                        }
-                    }
-
-                    // Battery bar
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 12
-
-                        Rectangle {
-                            Layout.preferredWidth: 50
-                            Layout.preferredHeight: 24
-                            color: "transparent"
-                            border.color: Theme.textSecondary
-                            border.width: 2
-                            radius: 4
-
-                            Rectangle {
-                                anchors.left: parent.left
-                                anchors.top: parent.top
-                                anchors.bottom: parent.bottom
-                                anchors.margins: 3
-                                width: Math.max(4, (parent.width - 6) * BatteryController.currentCharge / 100)
-                                color: BatteryController.currentCharge > 20 ? Theme.success : Theme.error
-                                radius: 2
-                            }
-
-                            Rectangle {
-                                anchors.right: parent.right
-                                anchors.rightMargin: -4
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: 4
-                                height: 10
-                                color: Theme.textSecondary
-                                radius: 1
-                            }
-                        }
-
-                        Label {
-                            text: BatteryController.currentCharge + "%"
-                            font.pixelSize: 16
-                            font.bold: true
-                            color: Theme.textPrimary
-                        }
-
-                        Item { Layout.fillWidth: true }
-
-                        Label {
-                            text: "Charge Limit"
-                            font.pixelSize: 13
-                            color: Theme.textSecondary
-                        }
-
-                        Label {
-                            text: BatteryController.chargeLimit + "%"
-                            font.pixelSize: 16
-                            font.bold: true
-                            color: Theme.accent
-                        }
-                    }
-
-                    Slider {
-                        Layout.fillWidth: true
+                    BlueSlider {
+                        id: chargeSlider
                         from: 20
                         to: 100
                         stepSize: 5
+                        snapMode: Slider.SnapAlways
                         value: BatteryController.chargeLimit
                         onPressedChanged: {
-                            if (!pressed) {
-                                BatteryController.setChargeLimit(value)
-                            }
-                        }
-
-                        background: Rectangle {
-                            x: parent.leftPadding
-                            y: parent.topPadding + parent.availableHeight / 2 - height / 2
-                            width: parent.availableWidth
-                            height: 6
-                            radius: 3
-                            color: Theme.border
-
-                            Rectangle {
-                                width: parent.parent.visualPosition * parent.width
-                                height: parent.height
-                                color: Theme.accent
-                                radius: 3
-                            }
-                        }
-
-                        handle: Rectangle {
-                            x: parent.leftPadding + parent.visualPosition * (parent.availableWidth - width)
-                            y: parent.topPadding + parent.availableHeight / 2 - height / 2
-                            width: 18
-                            height: 18
-                            radius: 9
-                            color: Theme.accent
+                            if (!pressed)
+                                BatteryController.setChargeLimit(Math.round(value))
                         }
                     }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-
-                        Repeater {
-                            model: [60, 80, 100]
-
-                            delegate: Rectangle {
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 32
-                                color: Theme.buttonBackground
-                                border.color: BatteryController.chargeLimit === modelData ? Theme.accent : Theme.border
-                                border.width: BatteryController.chargeLimit === modelData ? 2 : 1
-                                radius: 4
-
-                                Label {
-                                    anchors.centerIn: parent
-                                    text: modelData + "%"
-                                    color: BatteryController.chargeLimit === modelData ? Theme.accent : Theme.textPrimary
-                                }
-
-                                MouseArea {
-                                    anchors.fill: parent
-                                    onClicked: BatteryController.setChargeLimit(modelData)
-                                }
-                            }
+                    Rectangle {
+                        Layout.preferredWidth: 52
+                        Layout.preferredHeight: 26
+                        radius: 3
+                        color: Theme.controlBackground
+                        Label {
+                            anchors.centerIn: parent
+                            text: Math.round(chargeSlider.value) + "%"
+                            font.pixelSize: 13
+                            font.bold: true
+                            color: Theme.textSecondary
                         }
                     }
+                }
 
-                    Label {
-                        text: "Limiting charge extends battery lifespan. Recommended: 80% for daily use."
-                        font.pixelSize: 11
-                        color: Theme.textSecondary
-                        wrapMode: Text.WordWrap
-                        Layout.fillWidth: true
-                    }
+                Label {
+                    Layout.fillWidth: true
+                    visible: BatteryController.timeRemaining !== ""
+                    text: BatteryController.timeRemaining
+                          + (SystemMonitor.systemPower > 0 && !SystemMonitor.onBattery
+                             ? " · " + qsTr("System ~%1W").arg(SystemMonitor.systemPower.toFixed(0)) : "")
+                    font.pixelSize: 12
+                    color: Theme.textSecondary
                 }
             }
 
-            Item {
+            // === Footer like G-Helper: startup checkbox, version, settings, quit ===
+            Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 32
+                Layout.preferredHeight: 52
+                color: "#1a1a1a"
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 18
+                    anchors.rightMargin: 18
+                    spacing: 9
+
+                    DarkCheckBox {
+                        text: qsTr("Run on Startup")
+                        checked: Settings.autoStart
+                        onToggled: Settings.autoStart = checked
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                        text: "v" + appVersion
+                        font.pixelSize: 12
+                        color: versionMouse.containsMouse ? Theme.accentLight : Theme.textSecondary
+                        font.underline: versionMouse.containsMouse
+                        MouseArea {
+                            id: versionMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: aboutDialog.open()
+                        }
+                    }
+
+                    // Connection indicator: only asusd matters for most features
+                    Rectangle {
+                        width: 8
+                        height: 8
+                        radius: 4
+                        color: DBusWatcher.asusdConnected ? Theme.colorEco : Theme.error
+                        ToolTip.visible: dotMouse.containsMouse
+                        ToolTip.text: DBusWatcher.asusdConnected ? qsTr("asusd connected")
+                                                                 : qsTr("asusd is not running")
+                        MouseArea {
+                            id: dotMouse
+                            anchors.fill: parent
+                            anchors.margins: -6
+                            hoverEnabled: true
+                        }
+                    }
+
+                    FlatButton {
+                        id: settingsButton
+                        Layout.preferredWidth: 36
+                        iconSource: "qrc:/icons/settings.svg"
+                        onClicked: settingsPopup.open()
+                    }
+
+                    FlatButton {
+                        Layout.preferredWidth: 70
+                        text: qsTr("Quit")
+                        onClicked: Qt.quit()
+                    }
+                }
             }
         }
     }
 
-    // Dialogs
+    // ------------------------------------------------------------------
+    // Dialogs & popups
+    // ------------------------------------------------------------------
+
     AboutDialog {
         id: aboutDialog
         anchors.centerIn: parent
     }
 
-    // Fan Curve Window (separate window)
+    // Fan curve editor (separate window)
     Loader {
         id: fanCurveLoader
         active: false
         sourceComponent: FanCurveDialog {}
     }
 
-    function openFanCurveWindow() {
-        if (!fanCurveLoader.active) {
-            fanCurveLoader.active = true
-        }
-        if (fanCurveLoader.item) {
-            fanCurveLoader.item.open(window.x, window.y)
-        }
-    }
-
-    // Color picker dialog (simplified)
+    // Colour picker
     Dialog {
         id: colorDialog
         property int target: 0   // 0 = colour 1, 1 = colour 2
-        title: target === 0 ? "Select Color" : "Select Second Color"
+        title: target === 0 ? qsTr("Select Color") : qsTr("Select Second Color")
         anchors.centerIn: parent
         modal: true
 
         background: Rectangle {
             color: Theme.surface
             border.color: Theme.border
-            radius: 8
+            radius: 6
         }
 
         GridLayout {
@@ -877,6 +804,7 @@ ApplicationWindow {
                 ]
 
                 delegate: Rectangle {
+                    required property string modelData
                     width: 32
                     height: 32
                     color: modelData
@@ -885,11 +813,12 @@ ApplicationWindow {
 
                     MouseArea {
                         anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
                         onClicked: {
                             if (colorDialog.target === 0)
-                                AuraController.setColor1(modelData)
+                                AuraController.setColor1(parent.modelData)
                             else
-                                AuraController.setColor2(modelData)
+                                AuraController.setColor2(parent.modelData)
                             colorDialog.close()
                         }
                     }
@@ -898,107 +827,33 @@ ApplicationWindow {
         }
     }
 
-    // Settings popup
-    Popup {
-        id: settingsPopup
-        x: parent.width - width - 16
-        y: 60
-        width: 250
-        padding: 16
-
-        background: Rectangle {
-            color: Theme.surface
-            border.color: Theme.border
-            radius: 8
-        }
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 8
-
-            Label {
-                text: "Settings"
-                font.pixelSize: 16
-                font.bold: true
-                color: Theme.textPrimary
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                height: 1
-                color: Theme.border
-            }
-
-            CheckBox {
-                text: "Start minimized"
-                checked: Settings.startMinimized
-                onToggled: Settings.startMinimized = checked
-                contentItem: Label {
-                    text: parent.text
-                    color: Theme.textPrimary
-                    leftPadding: parent.indicator.width + 8
-                }
-            }
-
-            CheckBox {
-                text: "Start with system"
-                checked: Settings.autoStart
-                onToggled: Settings.autoStart = checked
-                contentItem: Label {
-                    text: parent.text
-                    color: Theme.textPrimary
-                    leftPadding: parent.indicator.width + 8
-                }
-            }
-
-            CheckBox {
-                text: "Minimize to tray"
-                checked: Settings.minimizeToTray
-                onToggled: Settings.minimizeToTray = checked
-                contentItem: Label {
-                    text: parent.text
-                    color: Theme.textPrimary
-                    leftPadding: parent.indicator.width + 8
-                }
-            }
-
-            CheckBox {
-                text: "Show tray icon"
-                checked: Settings.showTrayIcon
-                onToggled: Settings.showTrayIcon = checked
-                contentItem: Label {
-                    text: parent.text
-                    color: Theme.textPrimary
-                    leftPadding: parent.indicator.width + 8
-                }
-            }
-        }
-    }
-
+    // Keyboard extras: speed and second colour
     Popup {
         id: keyboardExtraPopup
         anchors.centerIn: parent
-        width: 240
+        width: 260
         padding: 16
+        modal: true
 
         background: Rectangle {
             color: Theme.surface
             border.color: Theme.border
-            radius: 8
+            radius: 6
         }
 
         ColumnLayout {
             anchors.fill: parent
-            spacing: 8
+            spacing: 10
 
             Label {
-                text: "Keyboard Settings"
+                text: qsTr("Keyboard Settings")
                 font.bold: true
+                font.pixelSize: 14
                 color: Theme.textPrimary
             }
 
             Label {
-                text: "Effect speed"
+                text: qsTr("Effect speed")
                 color: Theme.textSecondary
                 font.pixelSize: 12
             }
@@ -1010,27 +865,69 @@ ApplicationWindow {
                 opacity: enabled ? 1.0 : 0.4
 
                 Repeater {
-                    model: ["Low", "Medium", "High"]
-                    delegate: Rectangle {
-                        Layout.fillWidth: true
+                    model: [qsTr("Low"), qsTr("Medium"), qsTr("High")]
+                    delegate: ModeTile {
+                        required property string modelData
+                        required property int index
                         Layout.preferredHeight: 30
-                        radius: 4
-                        color: Theme.buttonBackground
-                        border.color: AuraController.speed === index ? Theme.accent : Theme.border
-                        border.width: AuraController.speed === index ? 2 : 1
-
-                        Label {
-                            anchors.centerIn: parent
-                            text: modelData
-                            font.pixelSize: 12
-                            color: AuraController.speed === index ? Theme.accent : Theme.textPrimary
-                        }
-
-                        MouseArea {
-                            anchors.fill: parent
-                            onClicked: AuraController.setSpeed(index)
-                        }
+                        label: modelData
+                        selected: AuraController.speed === index
+                        onClicked: AuraController.setSpeed(index)
                     }
+                }
+            }
+
+            FlatButton {
+                Layout.fillWidth: true
+                visible: AuraController.modeUsesTwoColors(AuraController.currentMode)
+                text: qsTr("Second color")
+                showSwatch: true
+                swatch: AuraController.color2
+                onClicked: {
+                    keyboardExtraPopup.close()
+                    colorDialog.target = 1
+                    colorDialog.open()
+                }
+            }
+        }
+    }
+
+    // App settings
+    Popup {
+        id: settingsPopup
+        x: parent.width - width - 18
+        y: parent.height - height - 60
+        width: 250
+        padding: 16
+
+        background: Rectangle {
+            color: Theme.surface
+            border.color: Theme.border
+            radius: 6
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 6
+
+            Label {
+                text: qsTr("Settings")
+                font.pixelSize: 15
+                font.bold: true
+                color: Theme.textPrimary
+            }
+
+            Repeater {
+                model: [
+                    { text: qsTr("Start minimized"), key: "startMinimized" },
+                    { text: qsTr("Minimize to tray"), key: "minimizeToTray" },
+                    { text: qsTr("Show tray icon"), key: "showTrayIcon" }
+                ]
+                delegate: DarkCheckBox {
+                    required property var modelData
+                    text: modelData.text
+                    checked: Settings[modelData.key]
+                    onToggled: Settings[modelData.key] = checked
                 }
             }
         }
@@ -1050,7 +947,7 @@ ApplicationWindow {
         background: Rectangle {
             color: Theme.surface
             border.color: Theme.border
-            radius: 8
+            radius: 6
         }
 
         Label {
@@ -1061,7 +958,7 @@ ApplicationWindow {
         }
     }
 
-    // Shown when supergfxd needs a logout/reboot to finish a switch
+    // Shown when a GPU switch needs a logout/reboot to finish
     Dialog {
         id: gpuActionDialog
         property string message: ""
@@ -1073,7 +970,7 @@ ApplicationWindow {
         background: Rectangle {
             color: Theme.surface
             border.color: Theme.border
-            radius: 8
+            radius: 6
         }
 
         Label {
@@ -1090,7 +987,7 @@ ApplicationWindow {
         property string message: ""
         anchors.bottom: parent.bottom
         anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottomMargin: 16
+        anchors.bottomMargin: 62
         width: Math.min(parent.width - 32, toastLabel.implicitWidth + 32)
         height: toastLabel.implicitHeight + 20
         radius: 6
@@ -1110,7 +1007,7 @@ ApplicationWindow {
         Label {
             id: toastLabel
             anchors.centerIn: parent
-            width: Math.min(implicitWidth, errorToast.parent.width - 64)
+            width: Math.min(implicitWidth, window.width - 64)
             text: errorToast.message
             wrapMode: Text.WordWrap
             color: "white"

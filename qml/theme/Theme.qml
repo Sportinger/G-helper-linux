@@ -2,24 +2,32 @@ pragma Singleton
 import QtQuick
 
 QtObject {
-    // Colors - G-Helper Dark Theme
-    readonly property color background: "#1e1e1e"
-    readonly property color surface: "#2d2d2d"
+    // Colors - G-Helper (Windows) dark theme
+    readonly property color background: "#202020"
+    readonly property color surface: "#2b2b2b"
     readonly property color surfaceLight: "#383838"
-    readonly property color buttonBackground: "#363636"
-    readonly property color border: "#404040"
-    readonly property color borderSelected: "#00a0e0"
+    readonly property color buttonBackground: "#373737"
+    readonly property color buttonHover: "#434343"
+    readonly property color controlBackground: "#333333"
+    readonly property color border: "#3d3d3d"
+    readonly property color borderSelected: "#3aaeef"
     readonly property color borderHover: "#606060"
 
     // Text colors
     readonly property color textPrimary: "#ffffff"
-    readonly property color textSecondary: "#b0b0b0"
-    readonly property color textDisabled: "#606060"
+    readonly property color textSecondary: "#b8b8b8"
+    readonly property color textDisabled: "#6a6a6a"
 
-    // Accent colors
-    readonly property color accent: "#00a0e0"
-    readonly property color accentLight: "#40c0ff"
-    readonly property color accentDark: "#007ab0"
+    // Accent colors (G-Helper blue)
+    readonly property color accent: "#3aaeef"
+    readonly property color accentLight: "#6cc4f4"
+    readonly property color accentDark: "#1f8acb"
+
+    // G-Helper mode colours (selected tile borders)
+    readonly property color colorEco: "#06b48a"
+    readonly property color colorStandard: "#3aaeef"
+    readonly property color colorTurbo: "#ff2020"
+    readonly property color colorCustom: "#ff8000"
 
     // Status colors
     readonly property color success: "#4caf50"
@@ -27,15 +35,15 @@ QtObject {
     readonly property color error: "#f44336"
 
     // Profile colors
-    readonly property color quietColor: "#4fc3f7"
-    readonly property color balancedColor: "#81c784"
-    readonly property color performanceColor: "#ff8a65"
+    readonly property color quietColor: colorEco
+    readonly property color balancedColor: colorStandard
+    readonly property color performanceColor: colorTurbo
 
     // GPU mode colors
-    readonly property color ecoColor: "#4caf50"
-    readonly property color standardColor: "#2196f3"
-    readonly property color ultimateColor: "#f44336"
-    readonly property color optimizedColor: "#9c27b0"
+    readonly property color ecoColor: colorEco
+    readonly property color standardColor: colorStandard
+    readonly property color ultimateColor: colorTurbo
+    readonly property color optimizedColor: colorEco
 
     // Spacing
     readonly property int spacingTiny: 4

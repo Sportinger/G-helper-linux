@@ -26,5 +26,15 @@
         <file>icons/led-rainbow.svg</file>
         <file>icons/led-pulse.svg</file>
         <file>icons/led-comet.svg</file>
+        <file>icons/mode-silent.svg</file>
+        <file>icons/mode-balanced.svg</file>
+        <file>icons/mode-turbo.svg</file>
+        <file>icons/mode-fans.svg</file>
+        <file>icons/gpu-eco.svg</file>
+        <file>icons/gpu-standard.svg</file>
+        <file>icons/gpu-ultimate.svg</file>
+        <file>icons/gpu-optimized.svg</file>
+        <file>icons/section-mode.svg</file>
+        <file>icons/section-slash.svg</file>
     </qresource>
 </RCC>

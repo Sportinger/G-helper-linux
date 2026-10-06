@@ -7,11 +7,14 @@
 #include <QScreen>
 #include <QWindow>
 #include <QSystemTrayIcon>
+#include <QQuickWindow>
+#include <QTimer>
 
 using namespace Qt::StringLiterals;
 
 #include "core/Settings.h"
 #include "core/Notifications.h"
+#include "core/PowerSupply.h"
 #include "dbus/DBusWatcher.h"
 #include "dbus/AsusdClient.h"
 #include "dbus/SuperGfxClient.h"
@@ -106,6 +109,14 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("GHelperLinux", 1, 0, "SlashController", &slashController);
     qmlRegisterSingletonInstance("GHelperLinux", 1, 0, "TrayManager", &trayManager);
 
+    // Device name for the window title, e.g. "ROG Zephyrus G14 GA403WW"
+    const QString deviceName = QStringList{
+        PowerSupply::readAttribute("/sys/class/dmi/id", "product_family"),
+        PowerSupply::readAttribute("/sys/class/dmi/id", "board_name")
+    }.join(' ').trimmed();
+    engine.rootContext()->setContextProperty("deviceName", deviceName);
+    engine.rootContext()->setContextProperty("appVersion", app.applicationVersion());
+
     // Load main QML
     const QUrl url(u"qrc:/GHelperLinux/qml/Main.qml"_s);
 
@@ -146,6 +157,20 @@ int main(int argc, char *argv[])
 
     // Start monitoring
     systemMonitor.start();
+
+    // Development aid: GHELPER_SCREENSHOT=/path/shot.png renders the main
+    // window into a PNG after it has loaded its data, then exits.
+    // Use with QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software.
+    const QString screenshotPath = qEnvironmentVariable("GHELPER_SCREENSHOT");
+    if (!screenshotPath.isEmpty()) {
+        if (window)
+            window->show();
+        QTimer::singleShot(3000, &app, [window, screenshotPath]() {
+            if (auto *quickWindow = qobject_cast<QQuickWindow *>(window))
+                quickWindow->grabWindow().save(screenshotPath);
+            QCoreApplication::quit();
+        });
+    }
 
     return app.exec();
 }
