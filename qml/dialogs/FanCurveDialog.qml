@@ -294,7 +294,10 @@ Window {
         }
 
         function tempToX(temp) {
-            return padding + (temp - minTemp) / (maxTemp - minTemp) * (width - padding * 2)
+            // Firmware curves may use e.g. 255 °C for "never reached" points;
+            // draw those at the right edge
+            var t = Math.min(temp, maxTemp)
+            return padding + (t - minTemp) / (maxTemp - minTemp) * (width - padding * 2)
         }
 
         function fanToY(fan) {
@@ -323,7 +326,7 @@ Window {
                 // asusd rejects curves where temperature or fan speed goes
                 // down, so keep each point between its neighbours
                 var minT = i > 0 ? curve[i - 1].temp : canvas.minTemp
-                var maxT = i < curve.length - 1 ? curve[i + 1].temp : canvas.maxTemp
+                var maxT = i < curve.length - 1 ? Math.min(curve[i + 1].temp, canvas.maxTemp) : canvas.maxTemp
                 var minF = i > 0 ? curve[i - 1].fan : 0
                 var maxF = i < curve.length - 1 ? curve[i + 1].fan : 100
 
@@ -456,7 +459,7 @@ Window {
                 if (dragIndex === m) {
                     ctx.fillStyle = Theme.textPrimary
                     ctx.textAlign = "center"
-                    ctx.fillText(drawCurve[m].temp + "° / " + drawCurve[m].fan + "%", ptx, pty - 12)
+                    ctx.fillText(drawCurve[m].temp + "° / " + Math.round(drawCurve[m].fan) + "%", ptx, pty - 12)
                 }
             }
             ctx.globalAlpha = 1.0

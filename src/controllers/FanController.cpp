@@ -111,15 +111,15 @@ QVariantList FanController::normalizedCurve(const QVariantList &points)
 {
     // Sort by temperature and make fan speeds non-decreasing, which is what
     // asusd requires.
-    QList<QPair<int, int>> pts;
+    QList<QPair<int, double>> pts;
     for (const QVariant &p : points) {
         const QVariantMap map = p.toMap();
-        pts.append({qBound(0, map.value("temp").toInt(), 120), qBound(0, map.value("fan").toInt(), 100)});
+        pts.append({qBound(0, map.value("temp").toInt(), 255), qBound(0.0, map.value("fan").toDouble(), 100.0)});
     }
     std::sort(pts.begin(), pts.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
 
     QVariantList result;
-    int prevFan = 0;
+    double prevFan = 0.0;
     for (const auto &pt : pts) {
         prevFan = qMax(prevFan, pt.second);
         result << QVariantMap{{"temp", pt.first}, {"fan", prevFan}};

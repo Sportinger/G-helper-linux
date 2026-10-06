@@ -5,15 +5,42 @@
 #include <QProcess>
 #include <QRegularExpression>
 
+namespace {
+
+// rog_slash::SlashMode values (asusd >= 6.4 exposes Mode as this byte)
+const QList<QPair<QString, int>> SLASH_MODES = {
+    {"Static", 0x06}, {"Bounce", 0x10}, {"Slash", 0x12}, {"Loading", 0x13},
+    {"BitStream", 0x1d}, {"Transmission", 0x1a}, {"Flow", 0x19}, {"Flux", 0x25},
+    {"Phantom", 0x24}, {"Spectrum", 0x26}, {"Hazard", 0x32}, {"Interfacing", 0x33},
+    {"Ramp", 0x34}, {"GameOver", 0x42}, {"Start", 0x43}, {"Buzzer", 0x44}
+};
+
+int slashModeValue(const QString &name)
+{
+    for (const auto &mode : SLASH_MODES) {
+        if (mode.first == name)
+            return mode.second;
+    }
+    return -1;
+}
+
+QString slashModeName(int value)
+{
+    for (const auto &mode : SLASH_MODES) {
+        if (mode.second == value)
+            return mode.first;
+    }
+    return QString();
+}
+
+}
+
 SlashController::SlashController(AsusdClient *client, QObject *parent)
     : QObject(parent)
     , m_client(client)
 {
-    m_availableModes = QStringList{
-        "Static", "Bounce", "Slash", "Loading", "BitStream",
-        "Transmission", "Flow", "Flux", "Phantom", "Spectrum",
-        "Hazard", "Interfacing", "Ramp", "GameOver", "Start", "Buzzer"
-    };
+    for (const auto &mode : SLASH_MODES)
+        m_availableModes << mode.first;
 
     connect(m_client, &AsusdClient::connectedChanged,
             this, &SlashController::onClientConnected);
@@ -55,9 +82,19 @@ void SlashController::refresh()
         }
     });
 
-    // asusd's "Mode" D-Bus getter returns the animation interval instead of
-    // the mode, so the mode is read from the daemon's config file.
-    readModeFromConfig();
+    if (m_client->slashModeIsByte()) {
+        m_client->getProperty(m_client->slashPath(), INTERFACE_SLASH, "Mode", [this](const QVariant &value) {
+            const QString mode = slashModeName(static_cast<int>(value.toUInt()));
+            if (!mode.isEmpty() && m_currentMode != mode) {
+                m_currentMode = mode;
+                emit modeChanged(mode);
+            }
+        });
+    } else {
+        // asusd < 6.4 returns the animation interval from the "Mode" getter,
+        // so the mode is read from the daemon's config file instead.
+        readModeFromConfig();
+    }
 }
 
 void SlashController::readModeFromConfig()
@@ -122,7 +159,15 @@ void SlashController::setMode(const QString &mode)
         emit modeChanged(mode);
     }
 
-    // The SlashMode D-Bus type is not a plain integer, so use asusctl here
+    if (m_client->slashModeIsByte()) {
+        m_client->setProperty(m_client->slashPath(), INTERFACE_SLASH, "Mode",
+                              QVariant::fromValue(static_cast<uchar>(slashModeValue(mode))),
+                              nullptr, tr("Failed to set Slash mode"),
+                              [this]() { refresh(); });
+        return;
+    }
+
+    // Older asusd: the SlashMode D-Bus type is not a plain integer, use asusctl
     auto *process = new QProcess(this);
     connect(process, &QProcess::finished, this,
             [this, process](int exitCode, QProcess::ExitStatus status) {

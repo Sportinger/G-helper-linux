@@ -64,8 +64,10 @@ public:
     void setLedMode(quint32 mode, const QColor &color1, const QColor &color2, int speed);
 
     // Slash lightbar
-    bool hasSlash() const { return m_hasSlash; }
-    QString slashPath() const { return QStringLiteral("/xyz/ljones/aura/slash"); }
+    bool hasSlash() const { return !m_slashPath.isEmpty(); }
+    QString slashPath() const { return m_slashPath; }
+    // asusd >= 6.4 exposes the Slash mode as a readable/writable byte
+    bool slashModeIsByte() const { return m_slashModeIsByte; }
 
     // Fan curves (asusd stores them per profile and applies them itself
     // whenever the platform profile changes)
@@ -117,7 +119,9 @@ private:
     void callFanCurves(const QString &method, const QVariantList &args,
                        std::function<void(const QDBusMessage &)> onSuccess,
                        const QString &errorText);
-    static QString dbusProfileName(quint32 dbusProfile);
+
+    // Fan names exactly as asusd reports them ("CPU", "GPU", "MID")
+    QString m_fanNames[3] = {QStringLiteral("CPU"), QStringLiteral("GPU"), QStringLiteral("MID")};
 
     static constexpr const char* PATH_PLATFORM = "/xyz/ljones";
     static constexpr const char* INTERFACE_PLATFORM = "xyz.ljones.Platform";
@@ -127,7 +131,9 @@ private:
 
     QDBusServiceWatcher *m_serviceWatcher = nullptr;
     QString m_auraPath;
-    bool m_hasSlash = false;
+    QString m_slashPath;
+    bool m_slashModeIsByte = false;
+    bool m_fanCurveStructs = true;   // asusd 6.x uses (yyyyyyyy)
 
     bool m_connected = false;
     int m_platformProfile = ProfileBalanced;

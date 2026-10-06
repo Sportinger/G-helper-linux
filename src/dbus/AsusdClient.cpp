@@ -5,7 +5,7 @@
 #include <QDBusReply>
 #include <QDBusVariant>
 #include <QDebug>
-#include <QProcess>
+#include <QRegularExpression>
 #include <QXmlStreamReader>
 
 namespace {
@@ -133,7 +133,7 @@ void AsusdClient::disconnectFromService()
     }
 
     m_auraPath.clear();
-    m_hasSlash = false;
+    m_slashPath.clear();
     m_connected = false;
     emit connectedChanged(false);
 }
@@ -141,7 +141,8 @@ void AsusdClient::disconnectFromService()
 void AsusdClient::findDevices()
 {
     m_auraPath.clear();
-    m_hasSlash = false;
+    m_slashPath.clear();
+    m_slashModeIsByte = false;
 
     const QString auraRoot = QStringLiteral("/xyz/ljones/aura");
     const QStringList nodes = childNodes(introspect(SERVICE, auraRoot));
@@ -150,12 +151,16 @@ void AsusdClient::findDevices()
         const QString path = auraRoot + "/" + node;
         const QString xml = introspect(SERVICE, path);
 
-        if (node == QLatin1String("slash")) {
-            m_hasSlash = xml.contains(QLatin1String("\"xyz.ljones.Slash\""));
-            continue;
+        // The Slash lightbar is either its own "slash" object or an extra
+        // interface on the keyboard object (e.g. Zephyrus G14 GA403)
+        if (m_slashPath.isEmpty() && xml.contains(QLatin1String("\"xyz.ljones.Slash\""))) {
+            m_slashPath = path;
+            m_slashModeIsByte = QRegularExpression(
+                "<property\\s+name=\"Mode\"\\s+type=\"y\"").match(xml).hasMatch();
         }
+
         // AniMe matrix and external SCSI devices are not the keyboard
-        if (node == QLatin1String("anime") || node.endsWith(QLatin1String("_scsi")))
+        if (node == QLatin1String("slash") || node == QLatin1String("anime") || node.endsWith(QLatin1String("_scsi")))
             continue;
 
         if (m_auraPath.isEmpty() && xml.contains(QLatin1String("\"xyz.ljones.Aura\"")))
@@ -163,7 +168,7 @@ void AsusdClient::findDevices()
     }
 
     qDebug() << "AsusdClient: keyboard aura device:" << (m_auraPath.isEmpty() ? "none" : m_auraPath)
-             << "slash:" << m_hasSlash;
+             << "slash:" << (m_slashPath.isEmpty() ? "none" : m_slashPath);
 }
 
 void AsusdClient::refresh()
@@ -255,16 +260,6 @@ quint32 AsusdClient::profileToDbus(int profile) const
             return AsusdProfile::Performance;
         default:
             return AsusdProfile::Balanced;
-    }
-}
-
-QString AsusdClient::dbusProfileName(quint32 dbusProfile)
-{
-    switch (dbusProfile) {
-        case AsusdProfile::Performance: return QStringLiteral("Performance");
-        case AsusdProfile::Quiet: return QStringLiteral("Quiet");
-        case AsusdProfile::LowPower: return QStringLiteral("LowPower");
-        default: return QStringLiteral("Balanced");
     }
 }
 
@@ -555,6 +550,41 @@ void AsusdClient::callFanCurves(const QString &method, const QVariantList &args,
     });
 }
 
+namespace {
+
+// asusd sends the 8 curve values either as a fixed struct (yyyyyyyy) or,
+// in other zvariant versions, as a byte array (ay). Accept both.
+QByteArray readCurveBytes(const QDBusArgument &arg)
+{
+    QByteArray values;
+    if (arg.currentType() == QDBusArgument::StructureType) {
+        arg.beginStructure();
+        while (!arg.atEnd()) {
+            uchar v = 0;
+            arg >> v;
+            values.append(static_cast<char>(v));
+        }
+        arg.endStructure();
+    } else {
+        arg >> values;
+    }
+    return values;
+}
+
+void writeCurveBytes(QDBusArgument &arg, const QByteArray &values, bool asStruct)
+{
+    if (asStruct) {
+        arg.beginStructure();
+        for (char v : values)
+            arg << static_cast<uchar>(v);
+        arg.endStructure();
+    } else {
+        arg << values;
+    }
+}
+
+}
+
 void AsusdClient::fetchFanCurves(int profile)
 {
     callFanCurves("FanCurveData", {QVariant::fromValue(profileToDbus(profile))},
@@ -564,30 +594,35 @@ void AsusdClient::fetchFanCurves(int profile)
             return;
         }
 
-        // a(sayayb): fan, pwm[8], temp[8], enabled
+        // a(s(yyyyyyyy)(yyyyyyyy)b): fan, pwm[8], temp[8], enabled
         const QDBusArgument arg = reply.arguments().constFirst().value<QDBusArgument>();
+        m_fanCurveStructs = arg.currentSignature().contains(QLatin1String("(yyyyyyyy)"));
         QVariantList curves;
 
         arg.beginArray();
         while (!arg.atEnd()) {
             QString fanName;
-            QByteArray pwm, temp;
             bool enabled = false;
 
             arg.beginStructure();
-            arg >> fanName >> pwm >> temp >> enabled;
+            arg >> fanName;
+            const QByteArray pwm = readCurveBytes(arg);
+            const QByteArray temp = readCurveBytes(arg);
+            arg >> enabled;
             arg.endStructure();
 
             int fan = FanCpu;
             if (fanName.compare("GPU", Qt::CaseInsensitive) == 0) fan = FanGpu;
             else if (fanName.compare("MID", Qt::CaseInsensitive) == 0) fan = FanMid;
+            m_fanNames[fan] = fanName;
 
             QVariantList points;
             const int count = qMin(pwm.size(), temp.size());
             for (int i = 0; i < count; ++i) {
+                // Keep the fan value unrounded so pwm -> % -> pwm is lossless
                 points << QVariantMap{
                     {"temp", static_cast<int>(static_cast<uchar>(temp.at(i)))},
-                    {"fan", qRound(static_cast<uchar>(pwm.at(i)) * 100.0 / 255.0)}
+                    {"fan", static_cast<uchar>(pwm.at(i)) * 100.0 / 255.0}
                 };
             }
 
@@ -612,49 +647,37 @@ void AsusdClient::setFanCurve(int profile, int fan, const QVariantList &points, 
     }
 
     // asusd rejects curves where temperature or fan speed decreases
-    QStringList dataPoints;
-    int prevTemp = -1, prevFan = -1;
+    QByteArray pwm, temps;
+    int prevTemp = -1, prevPwm = -1;
     for (const QVariant &point : points) {
         const QVariantMap p = point.toMap();
         const int temp = qBound(0, p.value("temp").toInt(), 255);
-        const int fanPercent = qBound(0, p.value("fan").toInt(), 100);
-        if (temp < prevTemp || fanPercent < prevFan) {
+        const int pwmValue = qBound(0, static_cast<int>(qRound(p.value("fan").toDouble() * 2.55)), 255);
+        if (temp < prevTemp || pwmValue < prevPwm) {
             emit errorOccurred(tr("Fan curve must not decrease"));
             return;
         }
         prevTemp = temp;
-        prevFan = fanPercent;
-        dataPoints << QStringLiteral("%1c:%2%").arg(temp).arg(fanPercent);
+        prevPwm = pwmValue;
+        temps.append(static_cast<char>(temp));
+        pwm.append(static_cast<char>(pwmValue));
     }
 
-    const quint32 dbusProfile = profileToDbus(profile);
-    const QString fanName = (fan == FanGpu) ? "gpu" : (fan == FanMid) ? "mid" : "cpu";
-    const QStringList args{"fan-curve", "--mod-profile", dbusProfileName(dbusProfile),
-                           "--fan", fanName, "--data", dataPoints.join(",")};
+    // CurveData (s(yyyyyyyy)(yyyyyyyy)b): fan, pwm, temp, enabled
+    QDBusArgument curve;
+    curve.beginStructure();
+    curve << m_fanNames[qBound(0, fan, 2)];
+    writeCurveBytes(curve, pwm, m_fanCurveStructs);
+    writeCurveBytes(curve, temps, m_fanCurveStructs);
+    curve << enabled;
+    curve.endStructure();
 
-    qDebug() << "AsusdClient: asusctl" << args;
-
-    // Writing curve data through asusctl stores it disabled, so the enabled
-    // state is (re)applied afterwards over D-Bus.
-    auto *process = new QProcess(this);
-    connect(process, &QProcess::finished, this,
-            [this, process, profile, enabled](int exitCode, QProcess::ExitStatus status) {
-        process->deleteLater();
-        if (status != QProcess::NormalExit || exitCode != 0) {
-            const QString error = QString::fromUtf8(process->readAllStandardError()).trimmed();
-            qWarning() << "AsusdClient: failed to set fan curve:" << error;
-            emit errorOccurred(tr("Failed to set fan curve: %1").arg(error));
-            return;
-        }
-        setFanCurvesEnabled(profile, enabled);
-    });
-    connect(process, &QProcess::errorOccurred, this, [this, process](QProcess::ProcessError error) {
-        if (error == QProcess::FailedToStart) {
-            emit errorOccurred(tr("asusctl not found"));
-            process->deleteLater();
-        }
-    });
-    process->start("asusctl", args);
+    callFanCurves("SetFanCurve", {QVariant::fromValue(profileToDbus(profile)), QVariant::fromValue(curve)},
+                  [this, profile, enabled](const QDBusMessage &) {
+                      // Custom curves always apply to all fans of a profile
+                      setFanCurvesEnabled(profile, enabled);
+                  },
+                  tr("Failed to set fan curve"));
 }
 
 void AsusdClient::setFanCurvesEnabled(int profile, bool enabled)
