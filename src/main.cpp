@@ -36,6 +36,8 @@ int main(int argc, char *argv[])
     app.setOrganizationName("g-helper-linux");
     app.setOrganizationDomain("github.com/g-helper-linux");
     app.setWindowIcon(QIcon(":/icons/g-helper.svg"));
+    // Lets the desktop match the window to g-helper-linux.desktop (dock icon)
+    app.setDesktopFileName("g-helper-linux");
 
     QCommandLineParser parser;
     parser.setApplicationDescription("ASUS ROG laptop control");
